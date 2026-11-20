@@ -1,0 +1,8 @@
+packages:
+  - apps/*
+
+# Install scripts pnpm may run. esbuild (used by tsx and Vite) needs its binary set up.
+# leveldown is an optional native dep of y-websocket for disk persistence; we don't use it.
+allowBuilds:
+  esbuild: true
+  leveldown: false

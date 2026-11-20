@@ -1,0 +1,15 @@
+{
+  "name": "sketch-canvas",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.6.0",
+  "scripts": {
+    "dev": "concurrently -n web,server -c blue,green \"pnpm --filter @sketch/web dev\" \"pnpm --filter @sketch/server dev\"",
+    "build": "pnpm --filter @sketch/web build",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.7",
+    "typescript": "^7.0.2"
+  }
+}
