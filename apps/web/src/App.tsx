@@ -70,7 +70,7 @@ export function App() {
         <button onClick={generate}>Generate</button>
         <span>{status}</span>
       </div>
-      {room ? <Canvas strokes={room.strokes} tool={tool} color={color} width={width} /> : <p>Connecting...</p>}
+      {room ? <Canvas strokes={room.strokes} awareness={room.awareness} tool={tool} color={color} width={width} /> : <p>Connecting...</p>}
     </main>
   );
 }
