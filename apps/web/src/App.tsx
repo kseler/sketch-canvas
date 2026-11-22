@@ -40,6 +40,14 @@ export function App() {
     saveIdentity(next);
   };
 
+  // Clear wipes the drawing for everyone in the room and can't be undone yet, so ask first.
+  const clearCanvas = () => {
+    if (!room || room.strokes.length === 0) return;
+    if (window.confirm('Clear the canvas for everyone in this room? This cannot be undone.')) {
+      room.strokes.delete(0, room.strokes.length);
+    }
+  };
+
   const generate = async () => {
     setStatus('Generating...');
     const res = await fetch('/api/generate', { method: 'POST' });
@@ -66,7 +74,7 @@ export function App() {
       <RoomControls roomName={roomName} />
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12, alignItems: 'center' }}>
         <Toolbar tool={tool} color={color} size={size} onTool={setTool} onColor={setColor} onSize={setSize} />
-        <button onClick={() => room?.strokes.delete(0, room.strokes.length)}>Clear</button>
+        <button onClick={clearCanvas}>Clear</button>
         <button onClick={generate}>Generate</button>
         <span>{status}</span>
       </div>
