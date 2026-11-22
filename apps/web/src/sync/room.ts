@@ -2,9 +2,15 @@ import { WebsocketProvider } from 'y-websocket';
 import * as Y from 'yjs';
 import type { Stroke } from '../types';
 
+// Awareness: short-lived per-person state (name, cursor, stroke in progress). Unlike the document,
+// it has no history and disappears when the person leaves.
+export type Awareness = WebsocketProvider['awareness'];
+
 export type Room = {
+  name: string;
   doc: Y.Doc;
   strokes: Y.Array<Stroke>;
+  awareness: Awareness;
   destroy: () => void;
 };
 
@@ -15,10 +21,29 @@ export function joinRoom(name: string): Room {
   const doc = new Y.Doc();
   const provider = new WebsocketProvider(WS_URL, name, doc);
   const strokes = doc.getArray<Stroke>('strokes');
+
+  // y-websocket does not announce leaving when a browser page closes, so others would keep seeing
+  // us for up to 30s (the awareness timeout). Clearing our state on pagehide tells them right away.
+  // If the page comes back from the back/forward cache, re-announce the state we had.
+  let beforeLeaving: ReturnType<typeof provider.awareness.getLocalState> = null;
+  const leave = () => {
+    beforeLeaving = provider.awareness.getLocalState();
+    provider.awareness.setLocalState(null);
+  };
+  const comeBack = (e: PageTransitionEvent) => {
+    if (e.persisted && beforeLeaving) provider.awareness.setLocalState(beforeLeaving);
+  };
+  window.addEventListener('pagehide', leave);
+  window.addEventListener('pageshow', comeBack);
+
   return {
+    name,
     doc,
     strokes,
+    awareness: provider.awareness,
     destroy: () => {
+      window.removeEventListener('pagehide', leave);
+      window.removeEventListener('pageshow', comeBack);
       provider.destroy();
       doc.destroy();
     },

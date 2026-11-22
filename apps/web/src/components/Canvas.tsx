@@ -3,12 +3,18 @@ import { useEffect, useRef, useState } from 'react';
 import { Layer, Rect, Stage } from 'react-konva';
 import type * as Y from 'yjs';
 import { useElementSize } from '../hooks/useElementSize';
+import { useLivePresence } from '../hooks/useLivePresence';
 import { appendIfFar, minDistanceFor, withFinalPoint, type Point } from '../lib/points';
+import { isStroke, liveTail } from '../lib/strokes';
+import type { Awareness } from '../sync/room';
 import type { Stroke, Tool } from '../types';
+import { CursorsLayer } from './CursorsLayer';
+import { LiveStrokes } from './LiveStrokes';
 import { StrokeLine } from './StrokeLine';
 
 type Props = {
   strokes: Y.Array<Stroke>;
+  awareness: Awareness;
   tool: Tool;
   color: string;
   width: number;
@@ -20,20 +26,36 @@ export const CANVAS_WIDTH = 800;
 export const CANVAS_HEIGHT = 600;
 const BORDER = 1;
 
+// Valid strokes from the shared document. Unknown or broken elements are skipped, so data from a
+// newer app version (or a broken client) can't crash this tab.
+function readStrokes(strokes: Y.Array<Stroke>): Stroke[] {
+  return strokes.toArray().filter(isStroke);
+}
+
 // Largest scale at which the whole 800x600 canvas fits in the available space.
 function fitScale(availableWidth: number, availableHeight: number): number {
   return Math.max(0, Math.min(availableWidth / CANVAS_WIDTH, availableHeight / CANVAS_HEIGHT));
 }
 
-export function Canvas({ strokes, tool, color, width }: Props) {
+export function Canvas({ strokes, awareness, tool, color, width }: Props) {
   const [areaRef, area] = useElementSize<HTMLDivElement>();
+  const live = useLivePresence(awareness);
   const scale = fitScale(area.width - BORDER * 2, area.height - BORDER * 2);
-  const [shared, setShared] = useState<Stroke[]>(() => strokes.toArray());
+  const [shared, setShared] = useState<Stroke[]>(() => readStrokes(strokes));
+
+  // The stroke being drawn. The ref is the source of truth (always the newest points, even between
+  // renders); the state copy makes React re-render it on screen.
+  const currentRef = useRef<number[] | null>(null);
   const [current, setCurrent] = useState<number[] | null>(null);
+  const updateCurrent = (points: number[] | null) => {
+    currentRef.current = points;
+    setCurrent(points);
+    if (points) live.setDrawing({ kind: 'stroke', tool, color, width, points: liveTail(points) });
+  };
 
   // Re-render whenever any player adds or clears strokes.
   useEffect(() => {
-    const sync = () => setShared(strokes.toArray());
+    const sync = () => setShared(readStrokes(strokes));
     strokes.observe(sync);
     sync();
     return () => strokes.unobserve(sync);
@@ -48,25 +70,38 @@ export function Canvas({ strokes, tool, color, width }: Props) {
   const start = (e: KonvaEventObject<PointerEvent>) => {
     const p = pointer(e);
     lastRaw.current = null;
-    if (p) setCurrent([p.x, p.y]);
+    if (p) updateCurrent([p.x, p.y]);
   };
 
   const move = (e: KonvaEventObject<PointerEvent>) => {
     const p = pointer(e);
     if (!p) return;
+    live.setCursor(p);
+    const points = currentRef.current;
+    if (!points) return; // just hovering
     lastRaw.current = p;
-    const minDistance = minDistanceFor(e.target.getStage()?.scaleX() ?? 1);
-    setCurrent((pts) => (pts ? appendIfFar(pts, p, minDistance) : pts));
+    const next = appendIfFar(points, p, minDistanceFor(e.target.getStage()?.scaleX() ?? 1));
+    if (next !== points) updateCurrent(next);
   };
 
-  // A stroke is shared when the pen lifts; in-progress strokes stay local.
+  // When the pen lifts, the stroke moves from awareness (live, temporary) into the document (kept).
+  // Document first, then clear the live copy: both travel over one WebSocket in order, so others
+  // briefly see the stroke twice (harmless) instead of a gap where it vanishes (a flicker).
   const end = () => {
-    const points = current ? withFinalPoint(current, lastRaw.current) : null;
+    const points = currentRef.current ? withFinalPoint(currentRef.current, lastRaw.current) : null;
     if (points && points.length >= 4) {
-      strokes.push([{ id: crypto.randomUUID(), tool, color, width, points }]);
+      strokes.push([{ kind: 'stroke', id: crypto.randomUUID(), tool, color, width, points }]);
     }
+    if (points) live.setDrawing(null);
     lastRaw.current = null;
+    currentRef.current = null;
     setCurrent(null);
+  };
+
+  // Leaving the canvas finishes any stroke and hides your cursor for everyone.
+  const leave = () => {
+    end();
+    live.setCursor(null);
   };
 
   return (
@@ -82,7 +117,7 @@ export function Canvas({ strokes, tool, color, width }: Props) {
             onPointerDown={start}
             onPointerMove={move}
             onPointerUp={end}
-            onPointerLeave={end}
+            onPointerLeave={leave}
             style={{ touchAction: 'none' }}
           >
             {/* White paper in its own layer, so it is part of the exported image and the eraser
@@ -94,8 +129,10 @@ export function Canvas({ strokes, tool, color, width }: Props) {
               {shared.map((s) => (
                 <StrokeLine key={s.id} stroke={s} />
               ))}
+              <LiveStrokes awareness={awareness} />
               {current && <StrokeLine stroke={{ id: 'current', tool, color, width, points: current }} />}
             </Layer>
+            <CursorsLayer awareness={awareness} scale={scale} />
           </Stage>
         </div>
       )}
