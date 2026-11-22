@@ -4,6 +4,7 @@ import { Layer, Rect, Stage } from 'react-konva';
 import type * as Y from 'yjs';
 import { useElementSize } from '../hooks/useElementSize';
 import { appendIfFar, minDistanceFor, withFinalPoint, type Point } from '../lib/points';
+import { isStroke } from '../lib/strokes';
 import type { Stroke, Tool } from '../types';
 import { StrokeLine } from './StrokeLine';
 
@@ -20,6 +21,12 @@ export const CANVAS_WIDTH = 800;
 export const CANVAS_HEIGHT = 600;
 const BORDER = 1;
 
+// Valid strokes from the shared document. Unknown or broken elements are skipped, so data from a
+// newer app version (or a broken client) can't crash this tab.
+function readStrokes(strokes: Y.Array<Stroke>): Stroke[] {
+  return strokes.toArray().filter(isStroke);
+}
+
 // Largest scale at which the whole 800x600 canvas fits in the available space.
 function fitScale(availableWidth: number, availableHeight: number): number {
   return Math.max(0, Math.min(availableWidth / CANVAS_WIDTH, availableHeight / CANVAS_HEIGHT));
@@ -28,12 +35,12 @@ function fitScale(availableWidth: number, availableHeight: number): number {
 export function Canvas({ strokes, tool, color, width }: Props) {
   const [areaRef, area] = useElementSize<HTMLDivElement>();
   const scale = fitScale(area.width - BORDER * 2, area.height - BORDER * 2);
-  const [shared, setShared] = useState<Stroke[]>(() => strokes.toArray());
+  const [shared, setShared] = useState<Stroke[]>(() => readStrokes(strokes));
   const [current, setCurrent] = useState<number[] | null>(null);
 
   // Re-render whenever any player adds or clears strokes.
   useEffect(() => {
-    const sync = () => setShared(strokes.toArray());
+    const sync = () => setShared(readStrokes(strokes));
     strokes.observe(sync);
     sync();
     return () => strokes.unobserve(sync);
@@ -63,7 +70,7 @@ export function Canvas({ strokes, tool, color, width }: Props) {
   const end = () => {
     const points = current ? withFinalPoint(current, lastRaw.current) : null;
     if (points && points.length >= 4) {
-      strokes.push([{ id: crypto.randomUUID(), tool, color, width, points }]);
+      strokes.push([{ kind: 'stroke', id: crypto.randomUUID(), tool, color, width, points }]);
     }
     lastRaw.current = null;
     setCurrent(null);

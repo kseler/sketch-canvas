@@ -2,6 +2,13 @@
 
 export type Point = { x: number; y: number };
 
+// For points that arrive from other players: untrusted until checked.
+export function isPoint(value: unknown): value is Point {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.x === 'number' && typeof v.y === 'number' && Number.isFinite(v.x) && Number.isFinite(v.y);
+}
+
 // Minimum on-screen distance between kept points, in screen pixels. Closer points look identical
 // but still cost bytes in the shared document.
 export const MIN_POINT_DISTANCE = 2;
