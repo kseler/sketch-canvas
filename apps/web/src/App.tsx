@@ -1,21 +1,19 @@
 import { useEffect, useState } from 'react';
 import { Canvas } from './components/Canvas';
 import { Presence } from './components/Presence';
+import { RoomControls } from './components/RoomControls';
 import { Toolbar } from './components/Toolbar';
+import { useRoomName } from './hooks/useRoomName';
 import { cleanName, loadIdentity, saveIdentity, type Identity } from './lib/identity';
 import { COLORS, ERASER_SCALE, type Size } from './lib/tools';
 import { joinRoom, type Room } from './sync/room';
 import type { Tool } from './types';
 
-// The room name lives in the URL hash, so sharing the URL puts friends on the same canvas.
-function getRoomName(): string {
-  if (!location.hash) location.hash = Math.random().toString(36).slice(2, 8);
-  return location.hash.slice(1);
-}
-
 export function App() {
-  const [roomName] = useState(getRoomName);
-  const [room, setRoom] = useState<Room | null>(null);
+  const roomName = useRoomName();
+  const [joined, setJoined] = useState<Room | null>(null);
+  // Right after a room switch, `joined` still holds the old room for one render; ignore it.
+  const room = joined?.name === roomName ? joined : null;
   const [tool, setTool] = useState<Tool>('pen');
   const [color, setColor] = useState(COLORS[0]!);
   const [size, setSize] = useState<Size>(4);
@@ -23,9 +21,11 @@ export function App() {
   const [identity, setIdentity] = useState<Identity>(loadIdentity);
   const width = tool === 'eraser' ? size * ERASER_SCALE : size;
 
+  // Join the room in the URL. When it changes, the cleanup leaves the old room first
+  // (disconnects and removes us from its awareness), then the new one is joined.
   useEffect(() => {
     const r = joinRoom(roomName);
-    setRoom(r);
+    setJoined(r);
     return () => r.destroy();
   }, [roomName]);
 
@@ -61,16 +61,21 @@ export function App() {
     >
       <header style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', justifyContent: 'space-between' }}>
         <h1 style={{ margin: 0 }}>Sketch Canvas</h1>
-        {room && <Presence awareness={room.awareness} onRename={rename} />}
+        {room && <Presence key={room.name} awareness={room.awareness} onRename={rename} />}
       </header>
-      <p style={{ margin: '8px 0 16px', color: '#555' }}>Room: {roomName}. Share this URL to draw together.</p>
+      <RoomControls roomName={roomName} />
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12, alignItems: 'center' }}>
         <Toolbar tool={tool} color={color} size={size} onTool={setTool} onColor={setColor} onSize={setSize} />
         <button onClick={() => room?.strokes.delete(0, room.strokes.length)}>Clear</button>
         <button onClick={generate}>Generate</button>
         <span>{status}</span>
       </div>
-      {room ? <Canvas strokes={room.strokes} awareness={room.awareness} tool={tool} color={color} width={width} /> : <p>Connecting...</p>}
+      {room ? (
+        // key: a fresh canvas per room, so nothing half-drawn carries over.
+        <Canvas key={room.name} strokes={room.strokes} awareness={room.awareness} tool={tool} color={color} width={width} />
+      ) : (
+        <p>Connecting...</p>
+      )}
     </main>
   );
 }
