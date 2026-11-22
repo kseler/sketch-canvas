@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Canvas } from './components/Canvas';
+import { Presence } from './components/Presence';
 import { Toolbar } from './components/Toolbar';
+import { cleanName, loadIdentity, saveIdentity, type Identity } from './lib/identity';
 import { COLORS, ERASER_SCALE, type Size } from './lib/tools';
 import { joinRoom, type Room } from './sync/room';
 import type { Tool } from './types';
@@ -18,6 +20,7 @@ export function App() {
   const [color, setColor] = useState(COLORS[0]!);
   const [size, setSize] = useState<Size>(4);
   const [status, setStatus] = useState('');
+  const [identity, setIdentity] = useState<Identity>(loadIdentity);
   const width = tool === 'eraser' ? size * ERASER_SCALE : size;
 
   useEffect(() => {
@@ -25,6 +28,17 @@ export function App() {
     setRoom(r);
     return () => r.destroy();
   }, [roomName]);
+
+  // Announce who we are to everyone in the room (awareness), and again after a rename.
+  useEffect(() => {
+    room?.awareness.setLocalStateField('user', identity);
+  }, [room, identity]);
+
+  const rename = (name: string) => {
+    const next = { ...identity, name: cleanName(name) };
+    setIdentity(next);
+    saveIdentity(next);
+  };
 
   const generate = async () => {
     setStatus('Generating...');
@@ -45,8 +59,11 @@ export function App() {
         flexDirection: 'column',
       }}
     >
-      <h1 style={{ margin: '0 0 8px' }}>Sketch Canvas</h1>
-      <p style={{ margin: '0 0 16px', color: '#555' }}>Room: {roomName}. Share this URL to draw together.</p>
+      <header style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', justifyContent: 'space-between' }}>
+        <h1 style={{ margin: 0 }}>Sketch Canvas</h1>
+        {room && <Presence awareness={room.awareness} onRename={rename} />}
+      </header>
+      <p style={{ margin: '8px 0 16px', color: '#555' }}>Room: {roomName}. Share this URL to draw together.</p>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12, alignItems: 'center' }}>
         <Toolbar tool={tool} color={color} size={size} onTool={setTool} onColor={setColor} onSize={setSize} />
         <button onClick={() => room?.strokes.delete(0, room.strokes.length)}>Clear</button>
