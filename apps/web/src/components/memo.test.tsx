@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { render } from '@testing-library/react';
+import { cleanup, render } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Awareness } from '../sync/room';
 import { CursorsLayer } from './CursorsLayer';
 import { LiveStrokes } from './LiveStrokes';
@@ -20,6 +20,7 @@ const awareness = {} as Awareness; // never read: usePeers is mocked
 beforeEach(() => {
   usePeers.mockClear();
 });
+afterEach(cleanup); // unmount, so renders don't pile up in document.body across tests
 
 // Canvas re-renders on every point of your own stroke. These layers get the same props each time,
 // so they should not re-render with it (that would redraw every remote cursor and live stroke).

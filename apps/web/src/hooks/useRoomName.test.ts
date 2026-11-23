@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, renderHook } from '@testing-library/react';
+import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isValidRoomId } from '../lib/roomId';
 import { goToNewRoom, useRoomName } from './useRoomName';
@@ -8,6 +8,8 @@ beforeEach(() => {
   history.replaceState(null, '', '#');
 });
 afterEach(() => {
+  // Unmount first: a hook left mounted keeps its hashchange listener and would react to later tests.
+  cleanup();
   vi.restoreAllMocks();
   history.replaceState(null, '', '#');
 });

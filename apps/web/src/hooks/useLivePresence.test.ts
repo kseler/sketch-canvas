@@ -1,10 +1,9 @@
 // @vitest-environment jsdom
-import { act, renderHook } from '@testing-library/react';
+import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LiveStroke } from '../lib/strokes';
 import type { Awareness } from '../sync/room';
 import { SEND_EVERY_MS, useLivePresence } from './useLivePresence';
-
 
 const user = { name: 'Blue Fox', color: '#e76f51' };
 const stroke = (n: number): LiveStroke => ({ color: '#000000', width: 4, points: [n, n, n + 1, n + 1] });
@@ -20,7 +19,10 @@ function setup() {
 }
 
 beforeEach(() => vi.useFakeTimers());
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  cleanup(); // unmount every hook from this test, so no timer or state carries into the next one
+  vi.useRealTimers();
+});
 
 describe('useLivePresence', () => {
   it('sends nothing until the throttle time has passed', () => {
