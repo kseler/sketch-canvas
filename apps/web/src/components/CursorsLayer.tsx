@@ -5,10 +5,11 @@ import type { Awareness } from '../sync/room';
 
 type Props = { awareness: Awareness; scale: number };
 
-// Flat, so usePeers can tell when nothing changed. Your own cursor is left out.
+// Flat, so usePeers can tell when nothing changed. Cursors of ALL your tabs are left out: your
+// other tab's cursor would otherwise show up here as someone else with your name.
 type RemoteCursor = { clientId: number; name: string; color: string; x: number; y: number };
-const toRemoteCursor = ({ clientId, isSelf, name, color, cursor }: Peer): RemoteCursor | null =>
-  !isSelf && cursor ? { clientId, name, color, x: cursor.x, y: cursor.y } : null;
+const toRemoteCursor = ({ clientId, isMe, name, color, cursor }: Peer): RemoteCursor | null =>
+  !isMe && cursor ? { clientId, name, color, x: cursor.x, y: cursor.y } : null;
 
 // Other players' cursors, on top of the drawing. Its own layer so cursor moves re-render only
 // this layer, and listening={false} so cursors never catch your pointer events.

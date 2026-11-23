@@ -3,8 +3,8 @@ import { Canvas } from './components/Canvas';
 import { Presence } from './components/Presence';
 import { RoomControls } from './components/RoomControls';
 import { Toolbar } from './components/Toolbar';
+import { useIdentity } from './hooks/useIdentity';
 import { useRoomName } from './hooks/useRoomName';
-import { cleanName, loadIdentity, saveIdentity, type Identity } from './lib/identity';
 import { COLORS, ERASER_SCALE, type Size } from './lib/tools';
 import { joinRoom, type Room } from './sync/room';
 import type { Tool } from './types';
@@ -18,7 +18,7 @@ export function App() {
   const [color, setColor] = useState(COLORS[0]!);
   const [size, setSize] = useState<Size>(4);
   const [status, setStatus] = useState('');
-  const [identity, setIdentity] = useState<Identity>(loadIdentity);
+  const [identity, rename] = useIdentity();
   const width = tool === 'eraser' ? size * ERASER_SCALE : size;
 
   // Join the room in the URL. When it changes, the cleanup leaves the old room first
@@ -29,16 +29,11 @@ export function App() {
     return () => r.destroy();
   }, [roomName]);
 
-  // Announce who we are to everyone in the room (awareness), and again after a rename.
+  // Announce who we are to everyone in the room (awareness), and again after a rename here or in
+  // another of your tabs.
   useEffect(() => {
     room?.awareness.setLocalStateField('user', identity);
   }, [room, identity]);
-
-  const rename = (name: string) => {
-    const next = { ...identity, name: cleanName(name) };
-    setIdentity(next);
-    saveIdentity(next);
-  };
 
   // Clear wipes the drawing for everyone in the room and can't be undone yet, so ask first.
   const clearCanvas = () => {

@@ -1,10 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isHexColor } from './color';
-import { isIdentity, loadIdentity, MAX_NAME_LENGTH, saveIdentity } from './identity';
+import { IDENTITY_STORAGE_KEY as KEY, isIdentity, loadIdentity, MAX_NAME_LENGTH, saveIdentity } from './identity';
 
-const KEY = 'sketch-canvas:identity';
-const valid = { name: 'Blue Fox', color: '#e76f51' };
+const valid = { id: '3f2a9c1e-5b7d-4e8a-9c21-7d4e5f6a8b90', name: 'Blue Fox', color: '#e76f51' };
 
 beforeEach(() => localStorage.clear());
 afterEach(() => {
