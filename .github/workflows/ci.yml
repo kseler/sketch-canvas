@@ -28,7 +28,7 @@ jobs:
           persist-credentials: false
 
       # Installs the pnpm version pinned in package.json ("packageManager").
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
       # The Node major version lives in .nvmrc, the same file local tools (nvm, fnm) read, so local
       # and CI can't drift apart.
