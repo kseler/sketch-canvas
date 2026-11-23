@@ -35,12 +35,21 @@ export function randomIdentity(): Identity {
 export function isIdentity(value: unknown): value is Identity {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
-  return typeof v.name === 'string' && hasVisibleText(v.name) && isHexColor(v.color);
+  // Checked on the name as it will be shown: "24 zero-width spaces + x" is visible before cutting
+  // and invisible after.
+  return typeof v.name === 'string' && hasVisibleText(cleanName(v.name)) && isHexColor(v.color);
 }
 
-// Trimmed and at most MAX_NAME_LENGTH characters, never cutting a character in half.
+// Names from other players can be any size and are cleaned on every awareness update. Splitting a
+// 5 MB name into graphemes takes ~200 ms, so it is first cut cheaply to a size no real 24-character
+// name exceeds (even 24 long joined emoji fit).
+const MAX_RAW_NAME_UNITS = MAX_NAME_LENGTH * 16;
+
+// Trimmed and at most MAX_NAME_LENGTH characters, never cutting a character in half, and trimmed
+// again so the cut can't leave a trailing space.
 export function cleanName(name: string): string {
-  return graphemes(name.trim()).slice(0, MAX_NAME_LENGTH).join('');
+  const capped = name.trim().slice(0, MAX_RAW_NAME_UNITS).replace(/[\uD800-\uDBFF]$/, ''); // no half emoji at the cap
+  return graphemes(capped).slice(0, MAX_NAME_LENGTH).join('').trim();
 }
 
 // Storage can be blocked (private mode, disabled site data), so every access is guarded and the

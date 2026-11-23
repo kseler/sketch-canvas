@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { hasVisibleText, MAX_NAME_LENGTH } from '../lib/identity';
+import { cleanName, hasVisibleText, MAX_NAME_LENGTH } from '../lib/identity';
 
 type Props = { name: string; onRename: (name: string) => void };
 
@@ -25,7 +25,7 @@ export function NameEditor({ name, onRename }: Props) {
   const finish = (save: boolean) => {
     if (finished.current) return;
     finished.current = true;
-    if (save && hasVisibleText(draft)) onRename(draft); // others would reject an invisible name
+    if (save && hasVisibleText(cleanName(draft))) onRename(draft); // others would reject an invisible name
     setDraft(null);
   };
 

@@ -23,6 +23,8 @@ describe('isIdentity (names and colors from other players)', () => {
     ['empty name', { name: '' }],
     ['whitespace-only name (an invisible avatar)', { name: ' \t\n ' }],
     ['zero-width-only name (invisible, and trim() keeps it)', { name: '​‍﻿' }],
+    // Found by the reviewer: visible before cutting to MAX_NAME_LENGTH, invisible after.
+    ['name that is only invisible once cut to size', { name: `${'​'.repeat(MAX_NAME_LENGTH)}x` }],
     ['number name', { name: 42 }],
     ['null name', { name: null }],
     ['missing name', { name: undefined }],
@@ -74,6 +76,20 @@ describe('cleanName', () => {
   it('counts a flag or a joined emoji as one character', () => {
     expect(cleanName(`${'a'.repeat(MAX_NAME_LENGTH - 1)}🇭🇷`)).toBe(`${'a'.repeat(MAX_NAME_LENGTH - 1)}🇭🇷`);
     expect(cleanName(`${'a'.repeat(MAX_NAME_LENGTH - 1)}👩‍💻x`)).toBe(`${'a'.repeat(MAX_NAME_LENGTH - 1)}👩‍💻`);
+  });
+
+  it('trims again after cutting, so no trailing space is left', () => {
+    expect(cleanName(`${'a'.repeat(MAX_NAME_LENGTH - 1)} b`)).toBe('a'.repeat(MAX_NAME_LENGTH - 1));
+  });
+
+  // Names from other players are cleaned on every awareness update. Uncut, a 5 MB name took ~200 ms
+  // per update; the cheap cap makes it ~instant. The 50 ms bound is far from both, so not flaky.
+  it('handles a huge hostile name quickly and returns its first characters', () => {
+    const huge = 'ab'.repeat(2_500_000);
+    const start = performance.now();
+    const cleaned = cleanName(huge);
+    expect(performance.now() - start).toBeLessThan(50);
+    expect(cleaned).toBe('ab'.repeat(MAX_NAME_LENGTH / 2));
   });
 });
 
@@ -135,14 +151,19 @@ describe('initials', () => {
 });
 
 describe('randomIdentity', () => {
+  // Seeded, so these tests always check the same identity.
   it('returns an identity that other players would accept', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
     expect(isIdentity(randomIdentity())).toBe(true);
   });
 
   it('has a two-word name within the length limit and a hex color', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
     const { name, color } = randomIdentity();
     expect(name).toMatch(/^\S+ \S+$/);
-    expect(name.length).toBeLessThanOrEqual(MAX_NAME_LENGTH);
+    // The limit counts characters as people see them, not UTF-16 units.
+    const characters = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(name)];
+    expect(characters.length).toBeLessThanOrEqual(MAX_NAME_LENGTH);
     expect(isHexColor(color)).toBe(true);
   });
 
