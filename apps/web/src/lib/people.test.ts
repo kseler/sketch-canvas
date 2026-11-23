@@ -132,6 +132,44 @@ describe('peersFromStates', () => {
     expect(peers.map((p) => p.clientId)).toEqual([13, 11, 14, 10, 12]);
   });
 
+  // Known, accepted limit (see newPersonId in identity.ts): ids are not verified, so two tabs that
+  // claim one id are one person, whatever their names and colors say.
+  it('documents the limit: peers sharing a person id are one person, name and color from the first in list order', () => {
+    const peers = peersFromStates(
+      states([
+        [1, { user: user({ id: OTHER, name: 'First', color: '#111111' }) }],
+        [2, { user: user({ id: OTHER, name: 'Second', color: '#222222' }) }],
+      ]),
+      9,
+    );
+    const people = groupByPerson(peers);
+    expect(people).toEqual([{ personId: OTHER, isMe: false, name: 'First', color: '#111111', tabs: 2 }]);
+  });
+
+  it('documents the limit: a peer that copies my person id is isMe and joins my avatar, but is never isSelf', () => {
+    const peers = peersFromStates(
+      states([
+        [1, { user: user({ name: 'Me' }) }],
+        [2, { user: user({ name: 'Copycat', color: '#222222' }), cursor: { x: 1, y: 1 } }],
+      ]),
+      1,
+    );
+    expect(peers.map((p) => [p.clientId, p.isSelf, p.isMe])).toEqual([[1, true, true], [2, false, true]]);
+    expect(groupByPerson(peers)).toEqual([{ personId: ME, isMe: true, name: 'Me', color: '#e76f51', tabs: 2 }]);
+  });
+
+  it('keeps a tab without an id and a tab with an id side by side, as two people', () => {
+    const peers = peersFromStates(
+      states([
+        [1, { user: { name: 'Old Tab', color: '#e76f51' } }],
+        [2, { user: user({ id: OTHER }) }],
+      ]),
+      9,
+    );
+    expect(peers.map((p) => [p.clientId, p.personId])).toEqual([[1, 'tab:1'], [2, OTHER]]);
+    expect(groupByPerson(peers).map((x) => [x.personId, x.tabs])).toEqual([['tab:1', 1], [OTHER, 1]]);
+  });
+
   it('returns an empty list for no states', () => {
     expect(peersFromStates(states([]), 1)).toEqual([]);
   });

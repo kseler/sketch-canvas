@@ -94,6 +94,65 @@ describe('useIdentity', () => {
     expect(stored()).toEqual(saved);
   });
 
+  it('puts its identity back and keeps it when another tab removes the key', () => {
+    localStorage.setItem(KEY, JSON.stringify(saved));
+    const { result } = renderHook(() => useIdentity());
+    const before = result.current[0];
+    localStorage.removeItem(KEY);
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', { key: KEY, newValue: null, storageArea: localStorage }));
+    });
+    expect(stored()).toEqual(saved);
+    expect(result.current[0]).toBe(before);
+  });
+
+  it('rename keeps the id another tab saved a moment ago, with the new name', () => {
+    localStorage.setItem(KEY, JSON.stringify(saved));
+    const { result } = renderHook(() => useIdentity());
+    // Another tab changed the id; this tab has not got the event yet.
+    localStorage.setItem(KEY, JSON.stringify({ ...saved, id: 'cccc-3333' }));
+    act(() => result.current[1]('New Name'));
+    const expected = { ...saved, id: 'cccc-3333', name: 'New Name' };
+    expect(stored()).toEqual(expected);
+    expect(result.current[0]).toEqual(expected);
+  });
+
+  it('two tabs: a rename in one reaches the other, and both keep the same id', () => {
+    localStorage.setItem(KEY, JSON.stringify(saved));
+    const a = renderHook(() => useIdentity());
+    const b = renderHook(() => useIdentity());
+    act(() => a.result.current[1]('Name From A'));
+    // The browser tells B (not A) about the change.
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent('storage', { key: KEY, newValue: localStorage.getItem(KEY), storageArea: localStorage }),
+      );
+    });
+    expect(b.result.current[0].name).toBe('Name From A');
+    expect(a.result.current[0]).toEqual(b.result.current[0]);
+    expect(a.result.current[0].id).toBe(saved.id);
+    expect(stored()).toEqual(a.result.current[0]);
+  });
+
+  it('keeps the same identity object when a storage event changes nothing', () => {
+    localStorage.setItem(KEY, JSON.stringify(saved));
+    const { result } = renderHook(() => useIdentity());
+    const before = result.current[0];
+    otherTabWrites({ ...saved });
+    expect(result.current[0]).toBe(before);
+  });
+
+  it('ignores an event from sessionStorage', () => {
+    localStorage.setItem(KEY, JSON.stringify(saved));
+    const { result } = renderHook(() => useIdentity());
+    const before = result.current[0];
+    localStorage.setItem(KEY, JSON.stringify({ ...saved, name: 'Changed' })); // would show if it re-read
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', { key: KEY, newValue: 'x', storageArea: sessionStorage }));
+    });
+    expect(result.current[0]).toBe(before);
+  });
+
   it('removes its storage listener on unmount', () => {
     localStorage.setItem(KEY, JSON.stringify(saved));
     const add = vi.spyOn(window, 'addEventListener');
