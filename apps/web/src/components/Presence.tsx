@@ -1,5 +1,7 @@
+import { useMemo } from 'react';
 import { usePeers, type Peer } from '../hooks/usePeers';
 import { initials } from '../lib/identity';
+import { groupByPerson, type Person } from '../lib/people';
 import type { Awareness } from '../sync/room';
 import { NameEditor } from './NameEditor';
 
@@ -9,35 +11,37 @@ const MAX_AVATARS = 4;
 const AVATAR = 32;
 
 // Only who is here, not where their cursor is: cursor moves don't re-render the avatars.
-type Member = Pick<Peer, 'clientId' | 'isSelf' | 'name' | 'color'>;
-const toMember = ({ clientId, isSelf, name, color }: Peer): Member => ({ clientId, isSelf, name, color });
+type Member = Pick<Peer, 'clientId' | 'personId' | 'isMe' | 'name' | 'color'>;
+const toMember = ({ clientId, personId, isMe, name, color }: Peer): Member => ({ clientId, personId, isMe, name, color });
 
-// "3 online", a stack of avatars (overflow shown as +N) and your own editable name.
+// "3 online", a stack of avatars (overflow shown as +N) and your own editable name. Counts people,
+// not tabs: your 2 tabs are one avatar.
 export function Presence({ awareness, onRename }: Props) {
-  const peers = usePeers(awareness, toMember);
-  const shown = peers.slice(0, MAX_AVATARS);
-  const hidden = peers.length - shown.length;
-  const self = peers.find((p) => p.isSelf);
+  const members = usePeers(awareness, toMember);
+  const people = useMemo(() => groupByPerson(members), [members]);
+  const shown = people.slice(0, MAX_AVATARS);
+  const hidden = people.length - shown.length;
+  const me = people.find((p) => p.isMe);
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
       <span style={{ color: '#555', fontSize: 14 }}>
-        <span style={{ color: '#22a55b' }}>●</span> {peers.length} online
+        <span style={{ color: '#22a55b' }}>●</span> {people.length} online
       </span>
       <div style={{ display: 'flex' }}>
-        {shown.map((peer, i) => (
-          <Avatar key={peer.clientId} peer={peer} overlap={i > 0} />
+        {shown.map((person, i) => (
+          <Avatar key={person.personId} person={person} overlap={i > 0} />
         ))}
         {hidden > 0 && <Bubble color="#777" text={`+${hidden}`} title={`${hidden} more`} overlap />}
       </div>
-      {self && <NameEditor name={self.name} onRename={onRename} />}
+      {me && <NameEditor name={me.name} onRename={onRename} />}
     </div>
   );
 }
 
-function Avatar({ peer, overlap }: { peer: Member; overlap: boolean }) {
-  const title = peer.isSelf ? `${peer.name} (you)` : peer.name;
-  return <Bubble color={peer.color} text={initials(peer.name)} title={title} overlap={overlap} />;
+function Avatar({ person, overlap }: { person: Person; overlap: boolean }) {
+  const title = `${person.name}${person.isMe ? ' (you)' : ''}${person.tabs > 1 ? ` · ${person.tabs} tabs` : ''}`;
+  return <Bubble color={person.color} text={initials(person.name)} title={title} overlap={overlap} />;
 }
 
 function Bubble({ color, text, title, overlap }: { color: string; text: string; title: string; overlap: boolean }) {

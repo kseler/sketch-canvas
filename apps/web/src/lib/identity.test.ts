@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isHexColor } from './color';
-import { cleanName, hasVisibleText, initials, isIdentity, MAX_NAME_LENGTH, randomIdentity } from './identity';
+import {
+  cleanName,
+  hasVisibleText,
+  initials,
+  isIdentity,
+  isPersonId,
+  MAX_NAME_LENGTH,
+  newPersonId,
+  randomIdentity,
+} from './identity';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -15,6 +24,11 @@ describe('isIdentity (names and colors from other players)', () => {
   });
 
   // Over-long names are accepted here and cut to size by cleanName where they are displayed.
+  it('accepts an identity with a valid person id, and one without (older tabs)', () => {
+    expect(isIdentity({ ...valid, id: crypto.randomUUID() })).toBe(true);
+    expect(isIdentity({ ...valid, id: undefined })).toBe(true);
+  });
+
   it('accepts an over-long name (callers shorten it with cleanName)', () => {
     expect(isIdentity({ ...valid, name: 'x'.repeat(MAX_NAME_LENGTH * 10) })).toBe(true);
   });
@@ -33,6 +47,12 @@ describe('isIdentity (names and colors from other players)', () => {
     ['short hex color', { color: '#fff' }],
     ['missing color', { color: undefined }],
     ['number color', { color: 0xe76f51 }],
+    ['id with a colon (could collide with the per-tab fallback)', { id: 'tab:1' }],
+    ['id with uppercase letters', { id: 'ABC' }],
+    ['empty id', { id: '' }],
+    ['over-long id', { id: 'a'.repeat(65) }],
+    ['number id', { id: 42 }],
+    ['null id', { id: null }],
   ])('rejects %s', (_label, change) => {
     expect(isIdentity({ ...valid, ...change })).toBe(false);
   });
@@ -157,6 +177,12 @@ describe('randomIdentity', () => {
     expect(isIdentity(randomIdentity())).toBe(true);
   });
 
+  it('includes a valid person id, different for each identity', () => {
+    const a = randomIdentity();
+    expect(isPersonId(a.id)).toBe(true);
+    expect(randomIdentity().id).not.toBe(a.id);
+  });
+
   it('has a two-word name within the length limit and a hex color', () => {
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
     const { name, color } = randomIdentity();
@@ -182,5 +208,44 @@ describe('randomIdentity', () => {
     const last = randomIdentity();
     expect(last.name).not.toBe(first.name);
     expect(last.color).not.toBe(first.color);
+  });
+});
+
+describe('isPersonId', () => {
+  it('accepts a crypto.randomUUID()', () => {
+    expect(isPersonId(crypto.randomUUID())).toBe(true);
+  });
+
+  it('accepts exactly 64 characters, rejects 65', () => {
+    expect(isPersonId('a'.repeat(64))).toBe(true);
+    expect(isPersonId('a'.repeat(65))).toBe(false);
+  });
+
+  it.each([
+    ['empty', ''],
+    ['uppercase', 'ABCD-1234'],
+    ['a colon (the per-tab fallback prefix)', 'tab:1'],
+    ['a space', 'a b'],
+    ['an underscore', 'a_b'],
+    ['a slash', 'a/b'],
+    ['a newline', 'abc\n'],
+    ['markup', '<img src=x>'],
+    ['non-ASCII', 'ä'],
+  ])('rejects %s', (_label, value) => {
+    expect(isPersonId(value)).toBe(false);
+  });
+
+  it.each([undefined, null, 42, {}, [], ['abc']])('rejects non-strings: %j', (value) => {
+    expect(isPersonId(value)).toBe(false);
+  });
+});
+
+describe('newPersonId', () => {
+  it('returns a valid person id', () => {
+    expect(isPersonId(newPersonId())).toBe(true);
+  });
+
+  it('returns a different id each time', () => {
+    expect(newPersonId()).not.toBe(newPersonId());
   });
 });
