@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isHexColor } from './color';
-import { IDENTITY_STORAGE_KEY as KEY, isIdentity, loadIdentity, MAX_NAME_LENGTH, saveIdentity } from './identity';
+import { IDENTITY_STORAGE_KEY as KEY, isIdentity, isPersonId, loadIdentity, MAX_NAME_LENGTH, saveIdentity } from './identity';
 
 const valid = { id: '3f2a9c1e-5b7d-4e8a-9c21-7d4e5f6a8b90', name: 'Blue Fox', color: '#e76f51' };
 
@@ -25,6 +25,27 @@ describe('loadIdentity', () => {
   it('cleans the saved name (trimmed and cut to the maximum length)', () => {
     localStorage.setItem(KEY, JSON.stringify({ ...valid, name: `  ${'x'.repeat(MAX_NAME_LENGTH + 10)}  ` }));
     expect(loadIdentity().name).toBe('x'.repeat(MAX_NAME_LENGTH));
+  });
+
+  it('keeps a saved person id', () => {
+    localStorage.setItem(KEY, JSON.stringify(valid));
+    expect(loadIdentity().id).toBe(valid.id);
+    expect(JSON.parse(localStorage.getItem(KEY)!).id).toBe(valid.id);
+  });
+
+  it('gives an identity saved without an id a valid one, and saves it so the next load returns the same id', () => {
+    localStorage.setItem(KEY, JSON.stringify({ name: 'Blue Fox', color: '#e76f51' }));
+    const first = loadIdentity();
+    expect(isPersonId(first.id)).toBe(true);
+    expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual(first);
+    expect(loadIdentity()).toEqual(first);
+  });
+
+  it('replaces a saved invalid id (hostile or corrupt) with a fresh saved identity', () => {
+    localStorage.setItem(KEY, JSON.stringify({ ...valid, id: 'tab:1' }));
+    const result = loadIdentity();
+    expect(isPersonId(result.id)).toBe(true);
+    expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual(result);
   });
 
   it('creates and saves a fresh identity when nothing is stored', () => {
