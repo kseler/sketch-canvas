@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { usePeers, type Peer } from '../hooks/usePeers';
 import type { LiveStroke } from '../lib/strokes';
 import type { Awareness } from '../sync/room';
@@ -11,7 +12,9 @@ const toDrawing = ({ clientId, isSelf, drawing }: Peer): Drawing | null => (!isS
 // Strokes other players are drawing right now (from awareness). Rendered inside the drawing layer
 // so a live eraser stroke cuts like a finished one. A live stroke draws on top of finished ones
 // until the pen lifts; then it takes its place in the document's order.
-export function LiveStrokes({ awareness }: { awareness: Awareness }) {
+// memo: Canvas re-renders on every point of your own stroke; with the same awareness this skips
+// those renders.
+export const LiveStrokes = memo(function LiveStrokes({ awareness }: { awareness: Awareness }) {
   const drawings = usePeers(awareness, toDrawing);
   return (
     <>
@@ -20,4 +23,4 @@ export function LiveStrokes({ awareness }: { awareness: Awareness }) {
       ))}
     </>
   );
-}
+});

@@ -1,0 +1,45 @@
+# Runs on every pull request and every push to main: a clean machine installs the exact locked
+# dependencies and runs the same checks you run locally. A red check means "don't merge".
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Read-only token: CI only needs to check out the code.
+permissions:
+  contents: read
+
+# On a PR, a newer push cancels the older, now outdated run. On main every merge gets its own
+# complete run, so two quick merges can't cancel each other's check.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # No later step pushes or fetches, so don't leave the git token on disk for PR code to read.
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      # Installs the pnpm version pinned in package.json ("packageManager").
+      - uses: pnpm/action-setup@v6
+
+      # The Node major version lives in .nvmrc, the same file local tools (nvm, fnm) read, so local
+      # and CI can't drift apart.
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # --frozen-lockfile: fail instead of silently updating pnpm-lock.yaml, so CI tests exactly
+      # what is committed.
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build

@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Group, Label, Layer, Line, Tag, Text } from 'react-konva';
 import { usePeers, type Peer } from '../hooks/usePeers';
 import type { Awareness } from '../sync/room';
@@ -11,7 +12,9 @@ const toRemoteCursor = ({ clientId, isSelf, name, color, cursor }: Peer): Remote
 
 // Other players' cursors, on top of the drawing. Its own layer so cursor moves re-render only
 // this layer, and listening={false} so cursors never catch your pointer events.
-export function CursorsLayer({ awareness, scale }: Props) {
+// memo: Canvas re-renders on every point of your own stroke; with unchanged props
+// (awareness, scale) this layer skips those renders.
+export const CursorsLayer = memo(function CursorsLayer({ awareness, scale }: Props) {
   const cursors = usePeers(awareness, toRemoteCursor);
   return (
     <Layer listening={false}>
@@ -20,7 +23,7 @@ export function CursorsLayer({ awareness, scale }: Props) {
       ))}
     </Layer>
   );
-}
+});
 
 // Positioned in canvas units, but counter-scaled so the arrow and label keep the same on-screen
 // size on a phone and a big monitor.

@@ -5,7 +5,7 @@ import type { Awareness } from '../sync/room';
 
 // Pointer events fire 60-120 times a second; each awareness change is a message to everyone.
 // 50ms (20 updates/s) still looks smooth to others.
-const SEND_EVERY_MS = 50;
+export const SEND_EVERY_MS = 50;
 
 type Live = { cursor: Point | null; drawing: LiveStroke | null };
 
