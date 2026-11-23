@@ -15,8 +15,9 @@ control, evals and guardrails. The day-by-day plan is in the doc linked from REA
 
 - `pnpm install` at the repo root (pnpm workspaces, see pnpm-workspace.yaml)
 - `pnpm dev` starts web (http://localhost:5173) and server (http://localhost:1234)
-- `pnpm typecheck` must pass before any commit
+- `pnpm typecheck` and `pnpm test` must pass before any commit
 - `pnpm build` builds the web app
+- CI (`.github/workflows/ci.yml`) runs install, typecheck, test and build on every PR and push to main
 
 ## Rules for working in this repo
 
@@ -56,3 +57,7 @@ and hardcoding canvas dimensions outside `CANVAS_WIDTH` / `CANVAS_HEIGHT`.
 
 At the end of each phase of the plan, and before merging anything, run the reviewer agent
 (`.claude/agents/reviewer.md`) on the changes and address its findings or explain why not.
+
+New logic gets tests next to its source (`foo.ts` → `foo.test.ts`, Vitest). The test-writer agent
+(`.claude/agents/test-writer.md`) drafts them; review its tests like a colleague's, and fix the bugs
+it reports in source yourself.
