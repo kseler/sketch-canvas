@@ -33,8 +33,13 @@ from its names, comments and callers, not just what it happens to do today.
   empty values, oversize input, and the specific attack the guard exists for.
 - Limits: test at the limit and just past it (e.g. exactly LIVE_MAX_COORDS, then +2).
 - Import limits and constants from the source instead of copying their values.
-- Default environment is node. Code that needs `localStorage`, `location` or `history` needs a DOM
-  environment, which is not installed: report it instead of faking a browser by hand.
+- Default environment is node. Only for code that needs `localStorage`, `location`, `history`,
+  `window` events or React rendering, start the file with `// @vitest-environment jsdom`. Test hooks
+  with `renderHook` (and `act`) from `@testing-library/react`. Reset what a test changes in the DOM
+  environment (storage, URL hash, spies) in `afterEach`, so tests don't depend on order.
+- Konva components can't render in jsdom (no canvas): don't try; report what you would test.
+- Fake collaborators (like a Yjs awareness object) with a small plain object exposing only the
+  methods the code calls, and record calls with `vi.fn()`.
 - Time-based code (throttles, timeouts): `vi.useFakeTimers()` and `vi.advanceTimersByTime()`, restore
   real timers after each test.
 - No snapshot tests, no tests of private helpers through hacks, no testing of library code (React,
