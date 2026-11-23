@@ -31,8 +31,12 @@ function pick<T>(items: readonly T[]): T {
   return items[Math.floor(Math.random() * items.length)]!;
 }
 
-// A person id groups one browser's tabs. It is only a grouping hint, not a login: anyone can send
-// any id, so it must never grant anything. From other players it's untrusted: short and plain only.
+// A person id groups one browser's tabs. It is a display hint, not a login. Ids, names and colors
+// are all broadcast, so a peer can copy yours: it then merges into your avatar ("· 2 tabs"), lowers
+// "N online", can make your avatar show its name for others, and its cursor is hidden from you.
+// Preventing that needs identity checked by the server (login); until then an id must only ever
+// affect how presence is DISPLAYED, never what anyone may do. From other players it's untrusted:
+// short and plain only.
 export function newPersonId(): string {
   return crypto.randomUUID();
 }
@@ -70,6 +74,18 @@ const MAX_RAW_NAME_UNITS = MAX_NAME_LENGTH * 16;
 export function cleanName(name: string): string {
   const capped = name.trim().slice(0, MAX_RAW_NAME_UNITS).replace(/[\uD800-\uDBFF]$/, ''); // no half emoji at the cap
   return graphemes(capped).slice(0, MAX_NAME_LENGTH).join('').trim();
+}
+
+// The identity currently saved, if it is valid and complete (has an id). Never writes, never makes
+// a new one: for merging a change into what another tab may have saved meanwhile.
+export function readStoredIdentity(): Identity | null {
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem(IDENTITY_STORAGE_KEY) ?? 'null');
+    if (isIdentity(stored) && stored.id) return { id: stored.id, name: cleanName(stored.name), color: stored.color };
+  } catch {
+    // unreadable or blocked: nothing usable is saved
+  }
+  return null;
 }
 
 // Storage can be blocked (private mode, disabled site data), so every access is guarded and the

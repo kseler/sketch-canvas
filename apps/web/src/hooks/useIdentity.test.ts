@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { IDENTITY_STORAGE_KEY as KEY, isIdentity, isPersonId, MAX_NAME_LENGTH } from '../lib/identity';
+import { IDENTITY_STORAGE_KEY as KEY, isIdentity, MAX_NAME_LENGTH } from '../lib/identity';
 import { useIdentity } from './useIdentity';
 
 const saved = { id: 'aaaa-1111', name: 'Blue Fox', color: '#e76f51' };
@@ -12,7 +12,7 @@ function otherTabWrites(value: unknown) {
   const newValue = JSON.stringify(value);
   localStorage.setItem(KEY, newValue);
   act(() => {
-    window.dispatchEvent(new StorageEvent('storage', { key: KEY, newValue }));
+    window.dispatchEvent(new StorageEvent('storage', { key: KEY, newValue, storageArea: localStorage }));
   });
 }
 
@@ -67,30 +67,31 @@ describe('useIdentity', () => {
     const before = result.current[0];
     localStorage.setItem(KEY, JSON.stringify({ ...saved, name: 'Changed' })); // would show if it re-read
     act(() => {
-      window.dispatchEvent(new StorageEvent('storage', { key: 'something-else', newValue: 'x' }));
+      window.dispatchEvent(new StorageEvent('storage', { key: 'something-else', newValue: 'x', storageArea: localStorage }));
     });
     expect(result.current[0]).toBe(before);
   });
 
-  it('gives a fresh valid saved identity when storage is cleared (key null)', () => {
+  // Found by the reviewer: making a new identity here split one browser into two people (the
+  // clearing tab gets no event and keeps the old one). Putting ours back keeps all tabs together.
+  it('puts its identity back when another tab clears storage (key null)', () => {
     localStorage.setItem(KEY, JSON.stringify(saved));
     const { result } = renderHook(() => useIdentity());
+    const before = result.current[0];
     localStorage.clear();
     act(() => {
-      window.dispatchEvent(new StorageEvent('storage', { key: null }));
+      window.dispatchEvent(new StorageEvent('storage', { key: null, storageArea: localStorage }));
     });
-    expect(isIdentity(result.current[0])).toBe(true);
-    expect(isPersonId(result.current[0].id)).toBe(true);
-    expect(result.current[0].id).not.toBe(saved.id);
-    expect(stored()).toEqual(result.current[0]);
+    expect(result.current[0]).toBe(before);
+    expect(stored()).toEqual(saved);
   });
 
-  it('falls back to a valid identity when another tab writes garbage', () => {
+  it('keeps its identity and restores storage when another tab writes garbage', () => {
     localStorage.setItem(KEY, JSON.stringify(saved));
     const { result } = renderHook(() => useIdentity());
     otherTabWrites({ name: 42, color: 'url(http://evil.test/x)' });
-    expect(isIdentity(result.current[0])).toBe(true);
-    expect(result.current[0].color).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(result.current[0]).toEqual(saved);
+    expect(stored()).toEqual(saved);
   });
 
   it('removes its storage listener on unmount', () => {
@@ -110,7 +111,7 @@ describe('useIdentity', () => {
     const { unmount } = renderHook(() => useIdentity());
     unmount();
     getItem.mockClear();
-    window.dispatchEvent(new StorageEvent('storage', { key: KEY, newValue: '{}' }));
+    window.dispatchEvent(new StorageEvent('storage', { key: KEY, newValue: '{}', storageArea: localStorage }));
     expect(getItem).not.toHaveBeenCalled();
   });
 });
