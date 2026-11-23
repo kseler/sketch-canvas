@@ -10,6 +10,19 @@ const ANIMALS = ['Fox', 'Otter', 'Panda', 'Owl', 'Koala', 'Tiger', 'Heron', 'Lyn
 const PEER_COLORS = ['#e76f51', '#2a9d8f', '#e9a23b', '#8338ec', '#3a86ff', '#ff006e', '#43aa8b', '#f3722c'];
 const STORAGE_KEY = 'sketch-canvas:identity';
 
+// People see characters (graphemes), not UTF-16 units: 🦊 is 2 units, 🇭🇷 is 4, 👩‍💻 is 5. Cutting
+// or picking by units can split one in half and show a broken glyph.
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+function graphemes(text: string): string[] {
+  return Array.from(graphemeSegmenter.segment(text), (s) => s.segment);
+}
+
+// At least one character a person can see: not only spaces, control characters or invisible
+// format characters such as the zero-width space (U+200B), which trim() leaves in place.
+export function hasVisibleText(text: string): boolean {
+  return /[^\p{Z}\p{Cc}\p{Cf}]/u.test(text);
+}
+
 function pick<T>(items: readonly T[]): T {
   return items[Math.floor(Math.random() * items.length)]!;
 }
@@ -22,11 +35,12 @@ export function randomIdentity(): Identity {
 export function isIdentity(value: unknown): value is Identity {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
-  return typeof v.name === 'string' && cleanName(v.name) !== '' && isHexColor(v.color);
+  return typeof v.name === 'string' && hasVisibleText(v.name) && isHexColor(v.color);
 }
 
+// Trimmed and at most MAX_NAME_LENGTH characters, never cutting a character in half.
 export function cleanName(name: string): string {
-  return name.trim().slice(0, MAX_NAME_LENGTH);
+  return graphemes(name.trim()).slice(0, MAX_NAME_LENGTH).join('');
 }
 
 // Storage can be blocked (private mode, disabled site data), so every access is guarded and the
@@ -51,11 +65,19 @@ export function saveIdentity(identity: Identity): void {
   }
 }
 
+// First character of the first two words: "Blue Fox" → "BF", "Fox 🦊" → "F🦊".
 export function initials(name: string): string {
   return name
+    .trim()
     .split(/\s+/)
-    .map((word) => Array.from(word)[0] ?? '') // Array.from keeps emoji whole (word[0] would split them)
-    .join('')
+    .filter(Boolean)
     .slice(0, 2)
-    .toUpperCase();
+    .map((word) => upperOne(graphemes(word)[0] ?? ''))
+    .join('');
+}
+
+// Uppercase one character, unless that turns it into two ("ß" → "SS" would give three initials).
+function upperOne(char: string): string {
+  const upper = char.toUpperCase();
+  return graphemes(upper).length === 1 ? upper : char;
 }
