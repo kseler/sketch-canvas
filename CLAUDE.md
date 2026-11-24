@@ -23,8 +23,9 @@ control, evals and guardrails. The day-by-day plan is in the doc linked from REA
 
 1. API keys stay on the server. Nothing in apps/web may read or embed a key.
 2. Every model output is validated with zod before it is used (see apps/server/src/brief.ts).
-3. Every paid call (vision or image) goes through one wrapper that logs to `cost-log.jsonl` via
-   `logCost` in apps/server/src/cost.ts. No paid call may bypass it.
+3. Every paid call (vision or image) goes through one wrapper, `paidCall` in apps/server/src/cost.ts:
+   it reserves the estimated cost against the daily caps before the call and logs the real cost to
+   `cost-log.jsonl` after it. No paid call may bypass it.
 4. Development uses the cheapest image tier. Higher tiers only for the evals.
 5. Keep functions small and typed. No `any` without a comment saying why.
 6. Do not add dependencies without saying why in the commit message.
