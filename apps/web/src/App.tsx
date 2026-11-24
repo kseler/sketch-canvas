@@ -1,10 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Canvas } from './components/Canvas';
 import { Presence } from './components/Presence';
 import { RoomControls } from './components/RoomControls';
 import { Toolbar } from './components/Toolbar';
 import { useIdentity } from './hooks/useIdentity';
 import { useRoomName } from './hooks/useRoomName';
+import { exportSketch } from './lib/exportSketch';
+import { requestGenerate } from './lib/generateClient';
+import { readStrokes } from './lib/strokes';
 import { COLORS, ERASER_SCALE, type Size } from './lib/tools';
 import { joinRoom, type Room } from './sync/room';
 import type { Tool } from './types';
@@ -43,11 +46,45 @@ export function App() {
     }
   };
 
+  // One request at a time, so a double click can't send (and later pay for) a sketch twice. The ref
+  // blocks a second click at once; the state only greys out the button on the next render.
+  const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
+
+  // The room on screen right now. A result that arrives after a room switch belongs to the old room
+  // and must not show up in the new one.
+  const roomNameRef = useRef(roomName);
+  useEffect(() => {
+    roomNameRef.current = roomName;
+    setStatus('');
+  }, [roomName]);
+
+  // Export the room's sketch and send it to the server. A canvas with no ink (empty, or only eraser
+  // strokes on blank paper) is not sent: once the pipeline is built, every request costs money.
   const generate = async () => {
-    setStatus('Generating...');
-    const res = await fetch('/api/generate', { method: 'POST' });
-    const body = (await res.json()) as { status: string };
-    setStatus(body.status);
+    if (!room || sendingRef.current) return;
+    const strokes = readStrokes(room.strokes);
+    if (!strokes.some((s) => s.tool !== 'eraser')) {
+      setStatus('Draw something first.');
+      return;
+    }
+    const forRoom = room.name;
+    const show = (text: string) => {
+      if (roomNameRef.current === forRoom) setStatus(text);
+    };
+    sendingRef.current = true;
+    setSending(true);
+    setStatus('Sending sketch...');
+    try {
+      const result = await requestGenerate(forRoom, await exportSketch(strokes));
+      show(result.ok ? `Server got a ${result.width}×${result.height} PNG (${Math.round(result.bytes / 1024)} KB).` : result.error);
+    } catch (err) {
+      console.error('Exporting the sketch failed:', err);
+      show('Could not export the sketch.');
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
+    }
   };
 
   return (
@@ -70,7 +107,9 @@ export function App() {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12, alignItems: 'center' }}>
         <Toolbar tool={tool} color={color} size={size} onTool={setTool} onColor={setColor} onSize={setSize} />
         <button onClick={clearCanvas}>Clear</button>
-        <button onClick={generate}>Generate</button>
+        <button onClick={generate} disabled={sending}>
+          Generate
+        </button>
         <span>{status}</span>
       </div>
       {room ? (

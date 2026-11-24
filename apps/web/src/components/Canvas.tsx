@@ -4,8 +4,9 @@ import { Layer, Rect, Stage } from 'react-konva';
 import type * as Y from 'yjs';
 import { useElementSize } from '../hooks/useElementSize';
 import { useLivePresence } from '../hooks/useLivePresence';
+import { CANVAS_HEIGHT, CANVAS_WIDTH } from '../lib/canvasSize';
 import { appendIfFar, minDistanceFor, withFinalPoint, type Point } from '../lib/points';
-import { isStroke, liveTail } from '../lib/strokes';
+import { liveTail, readStrokes } from '../lib/strokes';
 import type { Awareness } from '../sync/room';
 import type { Stroke, Tool } from '../types';
 import { CursorsLayer } from './CursorsLayer';
@@ -20,17 +21,7 @@ type Props = {
   width: number;
 };
 
-// The shared drawing space. Every player and the exported image use these coordinates; the stage
-// is only scaled to fit each screen, so a stroke lands in the same place for everyone.
-export const CANVAS_WIDTH = 800;
-export const CANVAS_HEIGHT = 600;
 const BORDER = 1;
-
-// Valid strokes from the shared document. Unknown or broken elements are skipped, so data from a
-// newer app version (or a broken client) can't crash this tab.
-function readStrokes(strokes: Y.Array<Stroke>): Stroke[] {
-  return strokes.toArray().filter(isStroke);
-}
 
 // Largest scale at which the whole 800x600 canvas fits in the available space.
 function fitScale(availableWidth: number, availableHeight: number): number {

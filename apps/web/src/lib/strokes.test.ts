@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { isLiveStroke, isStroke, LIVE_MAX_COORDS, liveTail } from './strokes';
+import * as Y from 'yjs';
+import type { Stroke } from '../types';
+import { isLiveStroke, isStroke, LIVE_MAX_COORDS, liveTail, readStrokes } from './strokes';
 
 // A valid stroke; each test breaks exactly one thing, so a failure points at one rule.
 const valid = { kind: 'stroke', id: 'a1', tool: 'pen', color: '#111111', width: 4, points: [0, 0, 10, 10] };
@@ -84,5 +86,30 @@ describe('liveTail', () => {
     const { id: _id, ...live } = valid;
     const long = new Array(LIVE_MAX_COORDS * 2).fill(5);
     expect(isLiveStroke({ ...live, points: liveTail(long) })).toBe(true);
+  });
+});
+
+describe('readStrokes', () => {
+  // A Y.Array in a real doc, filled with whatever "clients" pushed (cast: the array is typed, the data is not).
+  const arrayOf = (...items: unknown[]) => {
+    const array = new Y.Doc().getArray<Stroke>('strokes');
+    array.push(items as Stroke[]);
+    return array;
+  };
+
+  it('returns valid strokes in order', () => {
+    const second = { ...valid, id: 'a2' };
+    expect(readStrokes(arrayOf(valid, second))).toEqual([valid, second]);
+  });
+
+  it('returns an empty list for an empty array', () => {
+    expect(readStrokes(arrayOf())).toEqual([]);
+  });
+
+  it('skips broken and unknown elements instead of throwing', () => {
+    const hostile = { ...valid, id: 'x', color: 'red; background: url(//evil)' };
+    const image = { kind: 'image', id: 'i', url: '/u.png', x: 0, y: 0, w: 1, h: 1 };
+    const noId = { ...valid, id: undefined };
+    expect(readStrokes(arrayOf(hostile, valid, image, noId, 'text', 5, null))).toEqual([valid]);
   });
 });
