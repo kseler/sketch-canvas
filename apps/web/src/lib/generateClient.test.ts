@@ -12,7 +12,7 @@ const okBody = { brief };
 
 describe('readGenerateResponse', () => {
   it('reads a 2xx reply with a brief as ok', () => {
-    expect(readGenerateResponse(200, okBody)).toEqual({ ok: true, brief });
+    expect(readGenerateResponse(200, okBody)).toEqual({ ok: true, brief, picture: false });
   });
 
   it.each([
@@ -32,7 +32,7 @@ describe('readGenerateResponse', () => {
   it('keeps only palette entries that are #rrggbb colors, at most six', () => {
     const palette = ['#000000', 'red', 'url(x)', 7, '#ABCDEF', '#1', '#111111', '#222222', '#333333', '#444444', '#555555'];
     const result = readGenerateResponse(200, { brief: { ...brief, palette } });
-    expect(result).toEqual({ ok: true, brief: { ...brief, palette: ['#000000', '#ABCDEF', '#111111', '#222222', '#333333', '#444444'] } });
+    expect(result).toEqual({ ok: true, brief: { ...brief, palette: ['#000000', '#ABCDEF', '#111111', '#222222', '#333333', '#444444'] }, picture: false });
   });
 
   it('removes bidirectional-text controls that could reorder the line', () => {
@@ -88,7 +88,7 @@ describe('readGenerateResponse', () => {
     it('becomes an empty string when missing', () => {
       const { lettering: _omit, ...withoutLettering } = brief;
       const result = readGenerateResponse(200, { brief: withoutLettering });
-      expect(result).toEqual({ ok: true, brief: { ...brief, lettering: '' } });
+      expect(result).toEqual({ ok: true, brief: { ...brief, lettering: '' }, picture: false });
     });
 
     it.each([[5], [null], [{}], [['a']], [true]])('becomes an empty string for non-string %j', (value) => {
@@ -157,7 +157,7 @@ describe('requestGenerate', () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(okBody), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     const result = await requestGenerate('room-1', png);
-    expect(result).toEqual({ ok: true, brief });
+    expect(result).toEqual({ ok: true, brief, picture: false });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('/api/generate');
     expect(init.method).toBe('POST');
@@ -238,5 +238,13 @@ describe('requestGenerate', () => {
     await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
     caller.abort();
     expect(await pending).toEqual({ ok: false, error: 'Cancelled.' });
+  });
+});
+
+describe('picture flag', () => {
+  it('is true when the reply carries an image record, false otherwise', () => {
+    expect(readGenerateResponse(200, { brief, image: { id: 'x' } })).toMatchObject({ ok: true, picture: true });
+    expect(readGenerateResponse(200, { brief, image: null })).toMatchObject({ ok: true, picture: false });
+    expect(readGenerateResponse(200, { brief })).toMatchObject({ ok: true, picture: false });
   });
 });

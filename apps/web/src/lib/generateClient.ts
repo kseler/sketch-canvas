@@ -1,11 +1,12 @@
 // Talks to POST /api/generate. The server holds the API keys and makes the paid calls; the browser
 // only sends the sketch and shows what comes back.
 
-// The brief the server's vision step wrote for the sketch (later chunks add the image and a job id).
+// The brief the server's vision step wrote for the sketch. The picture itself reaches every tab
+// through the room's shared document; the reply only says whether one was made.
 // `lettering`: words the picture will show, or '' for none.
 export type Brief = { subject: string; style: string; mood: string; palette: string[]; composition: string; lettering: string };
 
-export type GenerateResult = { ok: true; brief: Brief } | { ok: false; error: string };
+export type GenerateResult = { ok: true; brief: Brief; picture: boolean } | { ok: false; error: string };
 
 // The PNG as base64 without the "data:image/png;base64," prefix.
 export function blobToBase64(blob: Blob): Promise<string> {
@@ -65,14 +66,16 @@ function readBrief(value: unknown): Brief | null {
 export function readGenerateResponse(status: number, body: unknown): GenerateResult {
   const b = asRecord(body);
   const brief = status >= 200 && status < 300 ? readBrief(b.brief) : null;
-  if (brief) return { ok: true, brief };
+  if (brief) return { ok: true, brief, picture: typeof b.image === 'object' && b.image !== null };
   const error = typeof b.error === 'string' ? b.error.slice(0, 200) : `Generate failed (HTTP ${status}).`;
   return { ok: false, error };
 }
 
 // A hung server must not leave the Generate button disabled forever. Longer than the server's own
-// 30 s limit on the AI call, so the server's clearer error arrives first.
-export const REQUEST_TIMEOUT_MS = 45_000;
+// limits on the AI calls (BRIEF_TIMEOUT_MS 30 s + MODERATION_TIMEOUT_MS 10 s + IMAGE_TIMEOUT_MS
+// 120 s on the server), so the server's clearer error arrives first. Chunk 6 replaces this long
+// wait with a job.
+export const REQUEST_TIMEOUT_MS = 180_000;
 
 // Why the request stopped early, or null if it wasn't stopped. The timeout is checked first, so a
 // caller's cancel that happens after the timeout still reads as a timeout.

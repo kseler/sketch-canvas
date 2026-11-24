@@ -6,6 +6,14 @@ import type { BriefOutcome, DescribeSketch } from './describeSketch';
 import { BudgetExceededError } from './budget';
 import { NotBilledError, PaidCallTimeoutError } from './cost';
 import { NotConfiguredError } from './generate';
+import { ImageBlockedError, InvalidImageError } from './generateImage';
+import { ContentFlaggedError, ModerationUnavailableError } from './moderation';
+import { PictureStorageError, type MakePicture } from './picture';
+import type { ImageRecord } from './roomImages';
+import { createImageStore, type ImageStore } from './imageStore';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 // Stands in for the vision step: no network, no cost. Records what it was asked.
 const FAKE_BRIEF = { subject: 'a cat on a hill', style: 'watercolor', mood: 'calm', palette: ['#3a7bd5'], composition: 'cat centered', lettering: '' };
 const describeCalls: Array<{ roomId: string; image: { base64: string; width: number; height: number } }> = [];
@@ -534,5 +542,221 @@ describe('provider busy', () => {
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: 'The AI service is busy. Try again in a minute.' });
     vi.restoreAllMocks();
+  });
+});
+
+describe('POST /api/generate picture step', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const ID = '3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b';
+  const RECORD: ImageRecord = { kind: 'image', id: ID, url: `/api/images/${ID}.png`, x: 0, y: 0, w: 800, h: 600, createdAt: '2026-11-24T12:00:00.000Z' };
+  const send = (a: ReturnType<typeof createApp>, body: unknown = validBody) =>
+    a.request('/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const withPicture = (makePicture: MakePicture, locks?: RoomLocks) => createApp({ describeSketch: fakeDescribe, makePicture, ...(locks ? { locks } : {}) });
+  const failing = (error: unknown): MakePicture => () => Promise.reject(error);
+  const errorText = async (res: Response) => ((await res.json()) as { error: string }).error;
+
+  it('answers 200 with the brief and the image record when a picture step is configured', async () => {
+    const res = await send(withPicture(async () => RECORD));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ brief: FAKE_BRIEF, image: RECORD });
+  });
+
+  it('answers with only the brief, no image key, when no picture step is configured', async () => {
+    const res = await send(createApp({ describeSketch: fakeDescribe }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ brief: FAKE_BRIEF });
+  });
+
+  it('gives the picture step the room, the brief and the area the sketch covers', async () => {
+    const makePicture = vi.fn<MakePicture>(async () => RECORD);
+    await send(withPicture(makePicture), { roomId: 'room-7', image: pngBase64(640, 480) });
+    expect(makePicture).toHaveBeenCalledTimes(1);
+    expect(makePicture).toHaveBeenCalledWith({ roomId: 'room-7', brief: FAKE_BRIEF, area: { x: 0, y: 0, w: 640, h: 480 } });
+  });
+
+  it('does not make a picture when the brief failed', async () => {
+    const makePicture = vi.fn<MakePicture>(async () => RECORD);
+    const a = createApp({ describeSketch: async () => ({ ok: false, reason: 'refused' }), makePicture });
+    expect((await send(a)).status).toBe(422);
+    expect(makePicture).not.toHaveBeenCalled();
+  });
+
+  it('answers 422 with the same text for our moderation flag and the image service block', async () => {
+    const flagged = await send(withPicture(failing(new ContentFlaggedError())));
+    const blocked = await send(withPicture(failing(new ImageBlockedError())));
+    expect(flagged.status).toBe(422);
+    expect(blocked.status).toBe(422);
+    expect(await errorText(flagged)).toBe(await errorText(blocked));
+  });
+
+  it.each([
+    ['ModerationUnavailableError', new ModerationUnavailableError(), 503],
+    ['InvalidImageError', new InvalidImageError(), 502],
+    ['PaidCallTimeoutError', new PaidCallTimeoutError(1000), 504],
+    ['a room BudgetExceededError', new BudgetExceededError('room'), 429],
+    ['a global BudgetExceededError', new BudgetExceededError('global'), 429],
+    ['an unknown error', new Error('boom'), 502],
+  ])('maps %s from the picture step to %i', async (_label, error, status) => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await send(withPicture(failing(error)));
+    expect(res.status).toBe(status);
+    expect(typeof (await errorText(res))).toBe('string');
+  });
+
+  it.each([
+    ['a flag', new ContentFlaggedError()],
+    ['an image block', new ImageBlockedError()],
+    ['moderation down', new ModerationUnavailableError()],
+    ['a broken image', new InvalidImageError()],
+    ['a timeout', new PaidCallTimeoutError(1000)],
+    ['a budget refusal', new BudgetExceededError('room')],
+    ['an unknown error', new Error('boom')],
+  ])('releases the room lock after %s', async (_label, error) => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const locks = createRoomLocks();
+    await send(withPicture(failing(error), locks));
+    expect(locks.isBusy('room-1')).toBe(false);
+  });
+
+  it('holds the room lock while the picture is being made', async () => {
+    const locks = createRoomLocks();
+    let finish: (record: ImageRecord) => void = () => {};
+    const makePicture: MakePicture = () => new Promise<ImageRecord>((resolve) => { finish = resolve; });
+    const pending = send(withPicture(makePicture, locks));
+    await vi.waitFor(() => expect(locks.isBusy('room-1')).toBe(true));
+    expect((await send(withPicture(makePicture, locks))).status).toBe(409);
+    finish(RECORD);
+    expect((await pending).status).toBe(200);
+    expect(locks.isBusy('room-1')).toBe(false);
+  });
+
+  it('never puts error messages or causes in the reply or the log', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const secret = 'SECRET-sk-proj-xyz';
+    const errors = [
+      new ContentFlaggedError(),
+      new ImageBlockedError({ cause: new Error(secret) }),
+      new ModerationUnavailableError({ cause: new Error(secret) }),
+      new InvalidImageError(),
+      new Error(secret),
+    ];
+    for (const error of errors) {
+      const res = await send(withPicture(failing(error)));
+      expect(await res.text()).not.toContain('SECRET');
+    }
+    expect(JSON.stringify(log.mock.calls)).not.toContain('SECRET');
+  });
+
+  it('logs only the error name for a failed picture', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await send(withPicture(failing(new ModerationUnavailableError({ cause: new Error('SECRET') }))));
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(String(log.mock.calls[0]![0])).toContain('ModerationUnavailableError');
+  });
+});
+
+describe('GET /api/images/:file', () => {
+  const ID = '3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b';
+  const BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+  const store = (): ImageStore & { read: ReturnType<typeof vi.fn> } => ({
+    save: vi.fn(),
+    read: vi.fn(async (name: string) => (name === `${ID}.png` ? BYTES : null)),
+  });
+
+  it('serves a stored picture as an immutable, non-sniffable PNG', async () => {
+    const res = await createApp({ images: store() }).request(`/api/images/${ID}.png`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('image/png');
+    expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff');
+    expect(res.headers.get('Content-Security-Policy')).toBe("default-src 'none'");
+    expect(res.headers.get('Cache-Control')).toContain('immutable');
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(BYTES);
+  });
+
+  it('asks the store for exactly the name in the URL', async () => {
+    const images = store();
+    await createApp({ images }).request(`/api/images/${ID}.png`);
+    expect(images.read).toHaveBeenCalledWith(`${ID}.png`);
+  });
+
+  it('answers 404 for a name the store does not have', async () => {
+    const res = await createApp({ images: store() }).request('/api/images/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.png');
+    expect(res.status).toBe(404);
+    expect(await res.json()).toHaveProperty('error');
+  });
+
+  it.each(['x.png', '..%2Fx.png', `${ID}.jpg`, `${ID.toUpperCase()}.png`])('answers 404 for the invalid name %s, even with a file of that name on disk', async (name) => {
+    const parent = await mkdtemp(path.join(tmpdir(), 'image-route-test-'));
+    try {
+      await writeFile(path.join(parent, 'x.png'), 'secret');
+      await mkdir(path.join(parent, 'images'));
+      await writeFile(path.join(parent, 'images', 'x.png'), 'secret');
+      const res = await createApp({ images: createImageStore(path.join(parent, 'images')) }).request(`/api/images/${name}`);
+      expect(res.status).toBe(404);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it('answers 404 when no image store is configured', async () => {
+    const res = await createApp().request(`/api/images/${ID}.png`);
+    expect(res.status).toBe(404);
+  });
+
+  it('still works for a GET from another site (read-only, the guard skips GET)', async () => {
+    const res = await createApp({ images: store() }).request(`/api/images/${ID}.png`, { headers: { Origin: 'https://evil.example' } });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Access-Control-Allow-Origin')).not.toBe('https://evil.example');
+  });
+});
+
+describe('chunk 5 review fixes', () => {
+  const post = (a: ReturnType<typeof createApp>) =>
+    a.request('/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(validBody) });
+
+  it('refuses a room nobody has open with 409, before any paid step', async () => {
+    const describe = vi.fn(fakeDescribe);
+    const res = await post(createApp({ describeSketch: describe, isRoomOpen: () => false }));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'Open the room before generating.' });
+    expect(describe).not.toHaveBeenCalled();
+  });
+
+  it('asks about the room from the request', async () => {
+    const isRoomOpen = vi.fn(() => true);
+    await post(createApp({ describeSketch: fakeDescribe, isRoomOpen }));
+    expect(isRoomOpen).toHaveBeenCalledWith('room-1');
+  });
+
+  it('says plainly when a paid picture could not be saved (500)', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const makePicture: MakePicture = () => Promise.reject(new PictureStorageError({ cause: new Error('ENOSPC') }));
+    const res = await post(createApp({ describeSketch: fakeDescribe, makePicture }));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'The picture was made but could not be saved. Try again.' });
+    vi.restoreAllMocks();
+  });
+
+  it('logs a refused picture by error name only', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const makePicture: MakePicture = () => Promise.reject(new ContentFlaggedError());
+    await post(createApp({ describeSketch: fakeDescribe, makePicture }));
+    expect(warn.mock.calls).toEqual([['generate: picture refused (ContentFlaggedError)']]);
+    vi.restoreAllMocks();
+  });
+});
+
+describe('the log line names the provider error code', () => {
+  it('logs status and code, e.g. 429 insufficient_quota (no credit) vs a real rate limit', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const makePicture: MakePicture = () => Promise.reject(new NotBilledError(429, { code: 'insufficient_quota' }));
+    await createApp({ describeSketch: fakeDescribe, makePicture }).request('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(validBody),
+    });
+    expect(error.mock.calls).toEqual([['generate: failed (NotBilledError 429 insufficient_quota)']]);
+    error.mockRestore();
   });
 });

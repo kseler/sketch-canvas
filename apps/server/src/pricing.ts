@@ -45,3 +45,24 @@ export function estimateTextUsd(model: TextModel, { inputTokens, maxTokens }: { 
 export function imageInputTokens(width: number, height: number): number {
   return Math.ceil(width / 28) * Math.ceil(height / 28);
 }
+
+// Image model prices, checked on 2026-11-23 at https://developers.openai.com/api/docs/pricing.
+// The prompt is billed as text input; the picture as image output tokens.
+export const IMAGE_PRICES = {
+  'gpt-image-2.6-flare': { textInputPerMTok: 5, imageInputPerMTok: 8, imageOutputPerMTok: 30 },
+} as const;
+
+export type ImageModel = keyof typeof IMAGE_PRICES;
+
+export type ImageUsage = { textInputTokens: number; imageInputTokens: number; outputTokens: number };
+
+// What an image call cost, from the token counts the API reports.
+export function imageCostUsd(model: ImageModel, usage: ImageUsage): number {
+  const price = IMAGE_PRICES[model];
+  return (
+    (usage.textInputTokens * price.textInputPerMTok +
+      usage.imageInputTokens * price.imageInputPerMTok +
+      usage.outputTokens * price.imageOutputPerMTok) /
+    1_000_000
+  );
+}

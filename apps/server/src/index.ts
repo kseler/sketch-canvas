@@ -3,11 +3,18 @@ import { loadEnvFile } from 'node:process';
 import { fileURLToPath } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
 import { serve } from '@hono/node-server';
+import OpenAI from 'openai';
+import { getYDoc } from 'y-websocket/bin/utils';
 import { createApp } from './app';
 import { readAllowedOrigins, readBudgetLimits } from './config';
 import { createCostTracker } from './cost';
 import { ANTHROPIC_API_URL, anthropicBriefClient, createDescribeSketch } from './describeSketch';
-import { attachYjsSync } from './sync';
+import { createGenerateImage, OPENAI_API_URL, openAiImageClient } from './generateImage';
+import { createImageStore } from './imageStore';
+import { checkContent, openAiModerationClient } from './moderation';
+import { createMakePicture, type MakePicture } from './picture';
+import { createRoomImages } from './roomImages';
+import { attachYjsSync, isRoomOpen } from './sync';
 
 // Keys and budget settings live in .env at the repo root (see .env.example). Node reads it
 // itself, so no extra dependency. A missing file is fine; values may come from the real
@@ -41,20 +48,41 @@ const describeSketch = apiKey
   ? createDescribeSketch({ client: anthropicBriefClient(new Anthropic({ apiKey, baseURL: ANTHROPIC_API_URL })), costs })
   : undefined;
 if (!describeSketch) console.warn('ANTHROPIC_API_KEY is not set: Generate is off.');
-// The SDK's debug log prints whole requests, including every player's sketch. Fine for a quick
-// local look, never for a server other people use.
-const sdkLog = process.env.ANTHROPIC_LOG?.trim().toLowerCase();
-// Fails closed: allowed only when NODE_ENV says development or test, so a deploy that forgot to
-// set NODE_ENV refuses to start rather than logging sketches.
-if (sdkLog === 'debug' || sdkLog === 'info') {
+// The SDKs' debug logs print whole requests: every player's sketch (ANTHROPIC_LOG), every image
+// prompt and picture (OPENAI_LOG). Fine for a quick local look, never for a server other people
+// use. Fails closed: allowed only when NODE_ENV says development or test, so a deploy that forgot
+// to set NODE_ENV refuses to start rather than logging sketches.
+for (const name of ['ANTHROPIC_LOG', 'OPENAI_LOG']) {
+  const sdkLog = process.env[name]?.trim().toLowerCase();
+  if (sdkLog !== 'debug' && sdkLog !== 'info') continue;
   const env = process.env.NODE_ENV;
   if (env !== 'development' && env !== 'test') {
-    throw new Error('ANTHROPIC_LOG=debug/info logs every sketch; allowed only with NODE_ENV=development or test.');
+    throw new Error(`${name}=debug/info logs every request; allowed only with NODE_ENV=development or test.`);
   }
-  console.warn(`ANTHROPIC_LOG=${sdkLog}: the SDK will log request bodies, including sketches.`);
+  console.warn(`${name}=${sdkLog}: the SDK will log request bodies, including sketches.`);
 }
 
-const app = createApp({ allowedOrigins: readAllowedOrigins(process.env), describeSketch });
+// The image step needs the OpenAI key (IMAGE_API_KEY, Images + Moderations). Without it, Generate
+// stops after the brief. The API host is pinned like Anthropic's; SDK retries are off per call.
+const images = createImageStore(fileURLToPath(new URL('../data/images', import.meta.url)));
+const imageKey = process.env.IMAGE_API_KEY?.trim();
+let makePicture: MakePicture | undefined;
+if (imageKey) {
+  // organization/project/webhookSecret set to null so stray OPENAI_* variables in the environment
+  // can't bill another project or add headers.
+  const openai = new OpenAI({ apiKey: imageKey, baseURL: OPENAI_API_URL, organization: null, project: null, webhookSecret: null });
+  const moderation = openAiModerationClient(openai);
+  makePicture = createMakePicture({
+    checkContent: (text) => checkContent(moderation, text),
+    generateImage: createGenerateImage({ client: openAiImageClient(openai), costs }),
+    store: images,
+    rooms: createRoomImages(getYDoc),
+  });
+} else {
+  console.warn('IMAGE_API_KEY is not set: Generate stops after the brief.');
+}
+
+const app = createApp({ allowedOrigins: readAllowedOrigins(process.env), describeSketch, makePicture, images, isRoomOpen });
 const server = serve({ fetch: app.fetch, port: PORT }) as Server;
 
 attachYjsSync(server);

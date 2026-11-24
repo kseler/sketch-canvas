@@ -5,3 +5,5 @@ dist
 cost-log.jsonl
 *.log
 .DS_Store
+# Generated pictures (stored by the server, never committed)
+apps/server/data/
