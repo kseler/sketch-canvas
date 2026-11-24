@@ -1,6 +1,9 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
+import { BudgetExceededError } from './budget';
+import { NotBilledError, PaidCallTimeoutError } from './cost';
+import type { BriefOutcome, DescribeSketch } from './describeSketch';
 import { decodeBase64, readPngInfo } from './png';
 import type { RoomLocks } from './roomLocks';
 
@@ -25,10 +28,47 @@ const GenerateRequest = z.object({
 // Error replies stay short and generic: they say what to fix, not how the server works.
 const tooLarge = { error: 'The sketch is too large.' };
 
-// POST /api/generate: { roomId, image: base64 PNG }.
-// Validates the sketch and confirms what it got. Later chunks turn it into a job (brief, then
-// image) behind the cost wrapper and budget checks.
-export function createGenerateRoute({ locks }: { locks: RoomLocks }) {
+// Thrown when the server has no API key, so Generate can't work (the canvas still does).
+export class NotConfiguredError extends Error {
+  constructor() {
+    super('Generate is not configured on this server.');
+    this.name = 'NotConfiguredError';
+  }
+}
+
+type Failure = { status: 422 | 429 | 502 | 503 | 504; error: string };
+
+// Why there is no brief, in words for the player. Fixed strings only: nothing from the model,
+// the provider or the request is echoed.
+const OUTCOME_FAILURES: Record<Exclude<BriefOutcome, { ok: true }>['reason'], Failure> = {
+  refused: { status: 422, error: 'The AI declined to describe this sketch. Try drawing something else.' },
+  truncated: { status: 502, error: "The AI's answer was unusable. Try again." },
+  invalid: { status: 502, error: "The AI's answer was unusable. Try again." },
+};
+
+// A thrown error as a reply. Logs only the error's name (and HTTP status): SDK errors can carry
+// request details, and the request holds the player's sketch.
+function failureFor(error: unknown): Failure {
+  if (error instanceof BudgetExceededError) {
+    return error.scope === 'room'
+      ? { status: 429, error: "This room has used today's AI budget. Try again tomorrow." }
+      : { status: 429, error: "Today's AI budget is used up. Try again tomorrow." };
+  }
+  if (error instanceof PaidCallTimeoutError) return { status: 504, error: 'The AI took too long. Try again.' };
+  if (error instanceof NotConfiguredError) return { status: 503, error: 'Generate is not set up on this server.' };
+  const name = error instanceof Error ? error.name : typeof error;
+  console.error(`generate: brief failed (${name}${error instanceof NotBilledError ? ` ${error.status}` : ''})`);
+  // The provider's own rate limit (429) or overload (529): busy, worth another try soon.
+  if (error instanceof NotBilledError && (error.status === 429 || error.status === 529)) {
+    return { status: 503, error: 'The AI service is busy. Try again in a minute.' };
+  }
+  return { status: 502, error: 'Could not reach the AI service. Try again later.' };
+}
+
+// POST /api/generate: { roomId, image: base64 PNG } → { brief }.
+// Validates the sketch, takes the room's lock, and asks the vision model for a brief through the
+// cost wrapper. Later chunks add the image and turn this into a job.
+export function createGenerateRoute({ locks, describeSketch }: { locks: RoomLocks; describeSketch: DescribeSketch }) {
   return new Hono().post(
     '/',
     // Refuses oversized bodies before reading them into memory (413 Payload Too Large).
@@ -50,10 +90,20 @@ export function createGenerateRoute({ locks }: { locks: RoomLocks }) {
       const release = locks.tryAcquire(parsed.data.roomId);
       if (!release) return c.json({ error: 'A picture is already being generated in this room.' }, 409);
       try {
-        // Chunk 3: the brief and the image calls go here, through costs.paidCall.
-        // No `status` field yet: that word is reserved for the job states chunk 6 adds
+        const outcome = await describeSketch({
+          roomId: parsed.data.roomId,
+          image: { base64: parsed.data.image, width: png.width, height: png.height },
+        });
+        if (!outcome.ok) {
+          const failure = OUTCOME_FAILURES[outcome.reason];
+          return c.json({ error: failure.error }, failure.status);
+        }
+        // No `status` field: that word is reserved for the job states chunk 6 adds
         // (queued, running, done, failed).
-        return c.json({ width: png.width, height: png.height, bytes: png.bytes });
+        return c.json({ brief: outcome.brief });
+      } catch (error) {
+        const failure = failureFor(error);
+        return c.json({ error: failure.error }, failure.status);
       } finally {
         release();
       }

@@ -74,10 +74,10 @@ export function App() {
     };
     sendingRef.current = true;
     setSending(true);
-    setStatus('Sending sketch...');
+    setStatus('Reading the sketch...');
     try {
       const result = await requestGenerate(forRoom, await exportSketch(strokes));
-      show(result.ok ? `Server got a ${result.width}×${result.height} PNG (${Math.round(result.bytes / 1024)} KB).` : result.error);
+      show(result.ok ? `Brief: ${result.brief.subject} · ${result.brief.style} · ${result.brief.mood}` : result.error);
     } catch (err) {
       console.error('Exporting the sketch failed:', err);
       show('Could not export the sketch.');

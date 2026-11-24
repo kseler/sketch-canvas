@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BudgetExceededError } from './budget';
-import { createCostTracker, PaidCallTimeoutError, type CostEntry } from './cost';
+import { createCostTracker, NotBilledError, PaidCallTimeoutError, type CostEntry } from './cost';
 
 const NOW = new Date('2026-11-24T12:00:00Z');
 const now = () => NOW;
@@ -243,5 +243,58 @@ describe('loadToday repairs a torn last line', () => {
     const afterRestart = tracker();
     expect(await afterRestart.loadToday()).toEqual({ counted: 1, skipped: 1 });
     expect(afterRestart.spentUsd()).toBe(0.017);
+  });
+});
+
+describe('paidCall with NotBilledError', () => {
+  it('settles to $0, logs usd 0 with ok:false and rethrows the same error', async () => {
+    const t = tracker();
+    const rejected = new NotBilledError(400);
+    await expect(t.paidCall(info, async () => { throw rejected; })).rejects.toBe(rejected);
+    expect(t.spentUsd()).toBe(0);
+    expect(t.spentUsd('room-1')).toBe(0);
+    const lines = await readLog();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ ok: false, usd: 0, roomId: 'room-1' });
+  });
+
+  it('frees the reserved estimate, so a room at its cap can call again', async () => {
+    const t = tracker({ limits: { dailyUsd: 1, roomDailyUsd: info.estimateUsd } });
+    await expect(t.paidCall(info, async () => { throw new NotBilledError(429); })).rejects.toBeInstanceOf(NotBilledError);
+    await expect(t.paidCall(info, async () => ({ value: 'ok', usd: 0.01 }))).resolves.toBe('ok');
+  });
+
+  it('keeps the estimate for any other error, so only NotBilledError is free', async () => {
+    const t = tracker();
+    await expect(t.paidCall(info, async () => { throw new Error('500'); })).rejects.toThrow('500');
+    expect(t.spentUsd()).toBe(info.estimateUsd);
+  });
+
+  it('carries the status and the cause', () => {
+    const cause = new Error('root');
+    const error = new NotBilledError(529, { cause });
+    expect(error.status).toBe(529);
+    expect(error.cause).toBe(cause);
+    expect(error.name).toBe('NotBilledError');
+  });
+});
+
+describe('paidCall when the real cost is above the estimate', () => {
+  it('warns, but still counts and logs the real cost', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const t = tracker();
+    await t.paidCall(info, async () => ({ value: 1, usd: info.estimateUsd * 2 }));
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(t.spentUsd()).toBeCloseTo(info.estimateUsd * 2, 10);
+    const [entry] = await readLog();
+    expect(entry).toMatchObject({ ok: true, usd: info.estimateUsd * 2 });
+  });
+
+  it('does not warn when the real cost equals or is below the estimate', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const t = tracker();
+    await t.paidCall(info, async () => ({ value: 1, usd: info.estimateUsd }));
+    await t.paidCall(info, async () => ({ value: 1, usd: 0 }));
+    expect(warn).not.toHaveBeenCalled();
   });
 });

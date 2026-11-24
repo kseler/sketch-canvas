@@ -1,11 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { createApp } from './app';
+import type { DescribeSketch } from './describeSketch';
+// Stands in for the vision step: no network, no cost. Records what it was asked.
+const FAKE_BRIEF = { subject: 'a cat on a hill', style: 'watercolor', mood: 'calm', palette: ['#3a7bd5'], composition: 'cat centered' };
+const describeCalls: Array<{ roomId: string; image: { base64: string; width: number; height: number } }> = [];
+const fakeDescribe: DescribeSketch = async (request) => {
+  describeCalls.push(request);
+  return { ok: true, brief: FAKE_BRIEF };
+};
+
 
 // The server repeats the web rule isValidRoomId (apps/web/src/lib/roomId.ts) in generate.ts. These are
 // the same accept/reject cases as apps/web/src/lib/roomId.test.ts: change one side, and update both.
 // Seen through POST /api/generate, since the rule is not exported.
 
-const app = createApp();
+const app = createApp({ describeSketch: fakeDescribe });
 const image = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 8, 0, 0, 0, 8,
   8, 0, 0, 0, 0, 0, 0, 0, 0,
