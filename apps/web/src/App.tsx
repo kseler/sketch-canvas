@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Canvas } from './components/Canvas';
+import { PicturePanel } from './components/PicturePanel';
 import { Presence } from './components/Presence';
 import { RoomControls } from './components/RoomControls';
 import { Toolbar } from './components/Toolbar';
@@ -84,7 +85,7 @@ export function App() {
     setStatus('Reading the sketch...');
     try {
       const result = await requestGenerate(forRoom, await exportSketch(strokes));
-      show(result.ok ? briefSummary(result.brief) : result.error);
+      show(result.ok ? `${result.picture ? 'Picture ready. ' : ''}${briefSummary(result.brief)}` : result.error);
     } catch (err) {
       console.error('Exporting the sketch failed:', err);
       show('Could not export the sketch.');
@@ -120,8 +121,12 @@ export function App() {
         <span>{status}</span>
       </div>
       {room ? (
-        // key: a fresh canvas per room, so nothing half-drawn carries over.
-        <Canvas key={room.name} strokes={room.strokes} awareness={room.awareness} tool={tool} color={color} width={width} />
+        // The canvas takes the remaining space; the picture panel sits beside it (sketch stays visible).
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 16 }}>
+          {/* key: a fresh canvas per room, so nothing half-drawn carries over. */}
+          <Canvas key={room.name} strokes={room.strokes} awareness={room.awareness} tool={tool} color={color} width={width} />
+          <PicturePanel key={`${room.name}-picture`} images={room.images} busy={sending} />
+        </div>
       ) : (
         <p>Connecting...</p>
       )}

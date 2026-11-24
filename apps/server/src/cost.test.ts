@@ -298,3 +298,16 @@ describe('paidCall when the real cost is above the estimate', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 });
+
+describe('NotBilledError code', () => {
+  it('keeps a provider error code that looks like an identifier', () => {
+    expect(new NotBilledError(429, { code: 'insufficient_quota' }).code).toBe('insufficient_quota');
+  });
+
+  it.each([['a message', 'You exceeded your quota, see https://x'], ['a newline (log injection)', 'a\nb'], ['too long', 'a'.repeat(65)], ['not a string', 42], ['missing', undefined]])(
+    'drops %s',
+    (_label, code) => {
+      expect(new NotBilledError(429, { code }).code).toBeNull();
+    },
+  );
+});

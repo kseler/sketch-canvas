@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { estimateTextUsd, imageInputTokens, TEXT_PRICES, textCostUsd } from './pricing';
+import { estimateTextUsd, IMAGE_PRICES, imageCostUsd, imageInputTokens, TEXT_PRICES, textCostUsd } from './pricing';
 
 const model = 'claude-haiku-5-5';
 const price = TEXT_PRICES[model];
@@ -62,5 +62,29 @@ describe('estimateTextUsd', () => {
   it.each([0, 1, 400, 800])('is at least the real cost for %i output tokens when max_tokens is 800', (outputTokens) => {
     const estimate = estimateTextUsd(model, { inputTokens: 2638, maxTokens: 800 });
     expect(estimate).toBeGreaterThanOrEqual(textCostUsd(model, { inputTokens: 2638, outputTokens }));
+  });
+});
+
+describe('imageCostUsd', () => {
+  const imageModel = 'gpt-image-2.6-flare';
+  const p = IMAGE_PRICES[imageModel];
+
+  it('prices text input, image input and output tokens at their own rates', () => {
+    expect(imageCostUsd(imageModel, { textInputTokens: 1000, imageInputTokens: 0, outputTokens: 600 })).toBeCloseTo(
+      (1000 * p.textInputPerMTok + 600 * p.imageOutputPerMTok) / 1e6,
+      10,
+    );
+    expect(imageCostUsd(imageModel, { textInputTokens: 0, imageInputTokens: 500, outputTokens: 0 })).toBeCloseTo(
+      (500 * p.imageInputPerMTok) / 1e6,
+      10,
+    );
+  });
+
+  it('matches the documented price of a low-tier picture (about $0.017)', () => {
+    expect(imageCostUsd(imageModel, { textInputTokens: 0, imageInputTokens: 0, outputTokens: 563 })).toBeCloseTo(0.0169, 4);
+  });
+
+  it('costs nothing for no tokens', () => {
+    expect(imageCostUsd(imageModel, { textInputTokens: 0, imageInputTokens: 0, outputTokens: 0 })).toBe(0);
   });
 });

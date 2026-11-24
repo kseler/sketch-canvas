@@ -2,6 +2,8 @@ import { Hono, type MiddlewareHandler } from 'hono';
 import { cors } from 'hono/cors';
 import { DEFAULT_ALLOWED_ORIGINS } from './config';
 import type { DescribeSketch } from './describeSketch';
+import type { ImageStore } from './imageStore';
+import type { MakePicture } from './picture';
 import { createGenerateRoute, NotConfiguredError } from './generate';
 import { createRoomLocks, type RoomLocks } from './roomLocks';
 
@@ -12,6 +14,12 @@ export type AppOptions = {
   locks?: RoomLocks;
   // The vision step. Without one (no API key), Generate answers 503 and the canvas still works.
   describeSketch?: DescribeSketch;
+  // The image step. Without one (no image key), Generate stops after the brief.
+  makePicture?: MakePicture;
+  // Where generated pictures are stored, for GET /api/images/:file.
+  images?: ImageStore;
+  // Whether someone has the room open (sync.ts isRoomOpen). Tests default to "yes".
+  isRoomOpen?: (roomId: string) => boolean;
 };
 
 const notConfigured: DescribeSketch = () => Promise.reject(new NotConfiguredError());
@@ -48,6 +56,9 @@ export function createApp({
   allowedOrigins = DEFAULT_ALLOWED_ORIGINS,
   locks = createRoomLocks(),
   describeSketch = notConfigured,
+  makePicture,
+  images,
+  isRoomOpen = () => true,
 }: AppOptions = {}): Hono {
   const app = new Hono();
   // Lets the listed origins read our answers. Other sites can't read them, and can't send JSON
@@ -57,7 +68,22 @@ export function createApp({
   // Covers /api/* only: every route that changes something must live under /api.
   app.use('/api/*', postGuard(allowedOrigins));
   app.get('/api/health', (c) => c.json({ ok: true }));
-  app.route('/api/generate', createGenerateRoute({ locks, describeSketch }));
+  app.route('/api/generate', createGenerateRoute({ locks, describeSketch, makePicture, isRoomOpen }));
+  // A stored picture. Only names our store writes can match (UUID + .png), so no other file can be
+  // read. nosniff: browsers must treat it as the PNG we say it is, never guess another type.
+  app.get('/api/images/:file', async (c) => {
+    const png = images ? await images.read(c.req.param('file')) : null;
+    if (!png) return c.json({ error: 'Not found.' }, 404);
+    // A plain copy: Hono wants a Uint8Array backed by an ArrayBuffer, not Node's shared Buffer pool.
+    return c.body(new Uint8Array(png), 200, {
+      'Content-Type': 'image/png',
+      'X-Content-Type-Options': 'nosniff',
+      // Opened directly, the file may do nothing but be shown.
+      'Content-Security-Policy': "default-src 'none'",
+      // A picture never changes once stored (a new one gets a new name).
+      'Cache-Control': 'public, max-age=31536000, immutable',
+    });
+  });
   // Anything a route didn't handle: a fixed reply, and only the error's name in the log.
   app.onError((error, c) => {
     console.error(`unhandled error: ${error.name}`);

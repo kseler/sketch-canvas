@@ -10,6 +10,8 @@ export type Room = {
   name: string;
   doc: Y.Doc;
   strokes: Y.Array<Stroke>;
+  // Generated pictures, written by the server. Unknown until checked (see lib/images.ts).
+  images: Y.Array<unknown>;
   awareness: Awareness;
   destroy: () => void;
 };
@@ -21,6 +23,7 @@ export function joinRoom(name: string): Room {
   const doc = new Y.Doc();
   const provider = new WebsocketProvider(WS_URL, name, doc);
   const strokes = doc.getArray<Stroke>('strokes');
+  const images = doc.getArray<unknown>('images');
 
   // y-websocket does not announce leaving when a browser page closes, so others would keep seeing
   // us for up to 30s (the awareness timeout). Clearing our state on pagehide tells them right away.
@@ -40,6 +43,7 @@ export function joinRoom(name: string): Room {
     name,
     doc,
     strokes,
+    images,
     awareness: provider.awareness,
     destroy: () => {
       window.removeEventListener('pagehide', leave);

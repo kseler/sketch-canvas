@@ -42,9 +42,15 @@ const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 // counts $0 instead of the estimate, so repeated rejections don't drain a room's budget.
 // Anything uncertain (a timeout, a dropped connection, a 500) must NOT use this.
 export class NotBilledError extends Error {
-  constructor(readonly status: number, options?: { cause?: unknown }) {
+  // The provider's short error code, e.g. 'insufficient_quota' vs 'rate_limit_exceeded' (both
+  // HTTP 429). Kept only if it looks like an identifier, so it is safe to log: never request
+  // content, never a message.
+  readonly code: string | null;
+
+  constructor(readonly status: number, options?: { cause?: unknown; code?: unknown }) {
     super(`The provider rejected the call (HTTP ${status}); it was not billed.`, options);
     this.name = 'NotBilledError';
+    this.code = typeof options?.code === 'string' && /^[a-z0-9_.-]{1,64}$/.test(options.code) ? options.code : null;
   }
 }
 
