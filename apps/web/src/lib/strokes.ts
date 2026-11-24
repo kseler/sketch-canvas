@@ -1,3 +1,4 @@
+import type * as Y from 'yjs';
 import type { Stroke } from '../types';
 import { isHexColor } from './color';
 
@@ -36,6 +37,14 @@ const asRecord = (value: unknown) => (typeof value === 'object' && value !== nul
 export function isStroke(value: unknown): value is Stroke {
   const s = asRecord(value);
   return s !== null && typeof s.id === 'string' && hasStrokeShape(s);
+}
+
+// Valid strokes from the shared document. Unknown or broken elements are skipped, so data from a
+// newer app version (or a broken client) can't crash this tab or end up in an exported sketch.
+// (Typed Y.Array<Stroke> like the room's array, but its items are still checked: it holds whatever
+// any client pushed.)
+export function readStrokes(strokes: Y.Array<Stroke>): Stroke[] {
+  return strokes.toArray().filter(isStroke);
 }
 
 export function isLiveStroke(value: unknown): value is LiveStroke {
