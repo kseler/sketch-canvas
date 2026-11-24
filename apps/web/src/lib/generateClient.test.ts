@@ -7,7 +7,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const brief = { subject: 'a cat on a hill', style: 'watercolor', mood: 'calm', palette: ['#3a7bd5', '#f5d76e'], composition: 'cat centered' };
+const brief = { subject: 'a cat on a hill', style: 'watercolor', mood: 'calm', palette: ['#3a7bd5', '#f5d76e'], composition: 'cat centered', lettering: '' };
 const okBody = { brief };
 
 describe('readGenerateResponse', () => {
@@ -40,10 +40,27 @@ describe('readGenerateResponse', () => {
     expect(result.ok && result.brief.subject).toBe('cattxt.exex');
   });
 
-  it('removes zero-width, tag, soft-hyphen and control characters, and line breaks', () => {
+  it('removes zero-width, tag and soft-hyphen characters, and turns line breaks into spaces (like the server)', () => {
     const subject = 'a\u061Cb\u200Bc\u{E0041}d\u00ADe\nf\u2028g';
     const result = readGenerateResponse(200, { brief: { ...brief, subject } });
-    expect(result.ok && result.brief.subject).toBe('abcdefg');
+    expect(result.ok && result.brief.subject).toBe('abcde f g');
+  });
+
+  it('turns control characters that are not whitespace (escape, bell) into spaces', () => {
+    const result = readGenerateResponse(200, { brief: { ...brief, subject: 'a\u001Bb\u0007c' } });
+    expect(result.ok && result.brief.subject).toBe('a b c');
+  });
+
+  it('cleans like the server: folds fullwidth lookalikes and removes blank filler letters', () => {
+    const result = readGenerateResponse(200, { brief: { ...brief, subject: 'ＦＲＥＥ\u3164 cat' } });
+    expect(result.ok && result.brief.subject).toBe('FREE cat');
+  });
+
+  it('never splits a character when capping the lettering', () => {
+    // U+20000 is a CJK letter outside the basic plane (two UTF-16 units) that NFKC leaves alone.
+    const lettering = 'a'.repeat(23) + '\u{20000}' + 'b';
+    const result = readGenerateResponse(200, { brief: { ...brief, lettering } });
+    expect(result.ok && result.brief.lettering).toBe('a'.repeat(23) + '\u{20000}');
   });
 
   it('never splits an emoji when capping', () => {
@@ -56,6 +73,40 @@ describe('readGenerateResponse', () => {
   it('caps long brief text at 300 characters', () => {
     const result = readGenerateResponse(200, { brief: { ...brief, subject: 's'.repeat(1000) } });
     expect(result.ok && result.brief.subject.length).toBe(300);
+  });
+
+  describe('lettering', () => {
+    const letter = (lettering: unknown) => {
+      const result = readGenerateResponse(200, { brief: { ...brief, lettering } });
+      return result.ok ? result.brief.lettering : null;
+    };
+
+    it('keeps lettering as sent', () => {
+      expect(letter('OPEN')).toBe('OPEN');
+    });
+
+    it('becomes an empty string when missing', () => {
+      const { lettering: _omit, ...withoutLettering } = brief;
+      const result = readGenerateResponse(200, { brief: withoutLettering });
+      expect(result).toEqual({ ok: true, brief: { ...brief, lettering: '' } });
+    });
+
+    it.each([[5], [null], [{}], [['a']], [true]])('becomes an empty string for non-string %j', (value) => {
+      expect(letter(value)).toBe('');
+    });
+
+    it('removes invisible characters and trims', () => {
+      expect(letter('  OP\u200BEN\u202E \n')).toBe('OPEN');
+    });
+
+    it('caps at 24 characters (the server limit)', () => {
+      expect(letter('a'.repeat(25))).toBe('a'.repeat(24));
+      expect(letter('a'.repeat(24))).toBe('a'.repeat(24));
+    });
+
+    it('does not make the brief fail when lettering is bad', () => {
+      expect(readGenerateResponse(200, { brief: { ...brief, lettering: 5 } }).ok).toBe(true);
+    });
   });
 
   it('uses the server error text for a non-2xx reply', () => {

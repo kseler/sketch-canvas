@@ -7,7 +7,7 @@ import { BudgetExceededError } from './budget';
 import { NotBilledError, PaidCallTimeoutError } from './cost';
 import { NotConfiguredError } from './generate';
 // Stands in for the vision step: no network, no cost. Records what it was asked.
-const FAKE_BRIEF = { subject: 'a cat on a hill', style: 'watercolor', mood: 'calm', palette: ['#3a7bd5'], composition: 'cat centered' };
+const FAKE_BRIEF = { subject: 'a cat on a hill', style: 'watercolor', mood: 'calm', palette: ['#3a7bd5'], composition: 'cat centered', lettering: '' };
 const describeCalls: Array<{ roomId: string; image: { base64: string; width: number; height: number } }> = [];
 const fakeDescribe: DescribeSketch = async (request) => {
   describeCalls.push(request);

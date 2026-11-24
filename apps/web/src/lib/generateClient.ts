@@ -2,7 +2,8 @@
 // only sends the sketch and shows what comes back.
 
 // The brief the server's vision step wrote for the sketch (later chunks add the image and a job id).
-export type Brief = { subject: string; style: string; mood: string; palette: string[]; composition: string };
+// `lettering`: words the picture will show, or '' for none.
+export type Brief = { subject: string; style: string; mood: string; palette: string[]; composition: string; lettering: string };
 
 export type GenerateResult = { ok: true; brief: Brief } | { ok: false; error: string };
 
@@ -25,14 +26,23 @@ const asRecord = (v: unknown): Record<string, unknown> =>
 // zero-width characters, soft hyphens, invisible "tag" characters), control characters (newlines,
 // tabs) and line/paragraph separators. Text drawn on the canvas can steer the model into writing
 // them, and the brief is shown as one line.
-const INVISIBLE = /[\p{Cf}\p{Cc}\u2028\u2029]/gu;
+const FORMAT_CHARS = /[\p{Cf}\u115F\u1160\u3164\uFFA0]/gu;
+const LINE_BREAKERS = /[\p{Cc}\u2028\u2029]/gu;
 
 // Display text from the server, capped: the server validates the brief, but the browser doesn't
 // assume it (a proxy or an older server could answer anything). 300 = the server's longest brief
 // field (BRIEF_LIMITS.composition in apps/server/src/brief.ts, which the web app can't import).
 function cleanText(v: unknown): string | null {
   if (typeof v !== 'string') return null;
-  const text = v.replace(INVISIBLE, '').trim();
+  // Same cleaning as the server's cleanBriefText: invisible characters go, line breaks become spaces.
+  const text = v
+    .normalize('NFKC')
+    .replace(FORMAT_CHARS, '')
+    .replace(LINE_BREAKERS, ' ')
+    .replace(/[\u2018\u2019\u02BC]/g, "'")
+    .replace(/[\u2010-\u2015\u2212]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
   // By code point, not UTF-16 unit, so the cap never splits an emoji in half.
   return text === '' ? null : Array.from(text).slice(0, 300).join('');
 }
@@ -45,7 +55,10 @@ function readBrief(value: unknown): Brief | null {
   const composition = cleanText(b.composition);
   const palette = Array.isArray(b.palette) ? b.palette.filter((c): c is string => typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c)).slice(0, 6) : [];
   if (!subject || !style || !mood || !composition) return null;
-  return { subject, style, mood, palette, composition };
+  // Optional: missing or empty means no words. Capped at the server's limit (BRIEF_LIMITS.lettering,
+  // 24 characters); the server drops longer lettering, this only guards the display.
+  const lettering = Array.from(cleanText(b.lettering) ?? '').slice(0, 24).join('');
+  return { subject, style, mood, palette, composition, lettering };
 }
 
 // The response is read defensively: a proxy error page or a crashed server must not break the UI.

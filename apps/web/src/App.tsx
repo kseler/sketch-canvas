@@ -11,6 +11,13 @@ import { readStrokes } from './lib/strokes';
 import { COLORS, ERASER_SCALE, type Size } from './lib/tools';
 import { joinRoom, type Room } from './sync/room';
 import type { Tool } from './types';
+import type { Brief } from './lib/generateClient';
+
+// One line for the status bar. React shows it as text, never as HTML.
+function briefSummary(brief: Brief): string {
+  const words = brief.lettering ? ` · with the words "${brief.lettering}"` : '';
+  return `Brief: ${brief.subject} · ${brief.style} · ${brief.mood}${words}`;
+}
 
 export function App() {
   const roomName = useRoomName();
@@ -77,7 +84,7 @@ export function App() {
     setStatus('Reading the sketch...');
     try {
       const result = await requestGenerate(forRoom, await exportSketch(strokes));
-      show(result.ok ? `Brief: ${result.brief.subject} · ${result.brief.style} · ${result.brief.mood}` : result.error);
+      show(result.ok ? briefSummary(result.brief) : result.error);
     } catch (err) {
       console.error('Exporting the sketch failed:', err);
       show('Could not export the sketch.');
