@@ -1,7 +1,8 @@
 import { Hono, type MiddlewareHandler } from 'hono';
 import { cors } from 'hono/cors';
 import { DEFAULT_ALLOWED_ORIGINS } from './config';
-import { createGenerateRoute } from './generate';
+import type { DescribeSketch } from './describeSketch';
+import { createGenerateRoute, NotConfiguredError } from './generate';
 import { createRoomLocks, type RoomLocks } from './roomLocks';
 
 export type AppOptions = {
@@ -9,7 +10,11 @@ export type AppOptions = {
   // Vite's proxy, which keeps the page's Origin (http://localhost:5173), so that must be listed.
   allowedOrigins?: string[];
   locks?: RoomLocks;
+  // The vision step. Without one (no API key), Generate answers 503 and the canvas still works.
+  describeSketch?: DescribeSketch;
 };
+
+const notConfigured: DescribeSketch = () => Promise.reject(new NotConfiguredError());
 
 // CORS alone does not stop a request: it only stops the browser from reading the answer, and it
 // asks first (a preflight) only for "non-simple" requests. A page on another site can still send
@@ -39,7 +44,11 @@ function postGuard(allowedOrigins: readonly string[]): MiddlewareHandler {
 }
 
 // The HTTP routes, without starting a server, so tests can call them with app.request().
-export function createApp({ allowedOrigins = DEFAULT_ALLOWED_ORIGINS, locks = createRoomLocks() }: AppOptions = {}): Hono {
+export function createApp({
+  allowedOrigins = DEFAULT_ALLOWED_ORIGINS,
+  locks = createRoomLocks(),
+  describeSketch = notConfigured,
+}: AppOptions = {}): Hono {
   const app = new Hono();
   // Lets the listed origins read our answers. Other sites can't read them, and can't send JSON
   // without a preflight, which fails for them. CORS only binds browsers: curl or a script ignores
@@ -48,6 +57,11 @@ export function createApp({ allowedOrigins = DEFAULT_ALLOWED_ORIGINS, locks = cr
   // Covers /api/* only: every route that changes something must live under /api.
   app.use('/api/*', postGuard(allowedOrigins));
   app.get('/api/health', (c) => c.json({ ok: true }));
-  app.route('/api/generate', createGenerateRoute({ locks }));
+  app.route('/api/generate', createGenerateRoute({ locks, describeSketch }));
+  // Anything a route didn't handle: a fixed reply, and only the error's name in the log.
+  app.onError((error, c) => {
+    console.error(`unhandled error: ${error.name}`);
+    return c.json({ error: 'Something went wrong.' }, 500);
+  });
   return app;
 }

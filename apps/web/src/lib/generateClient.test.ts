@@ -7,26 +7,55 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const okBody = { width: 800, height: 600, bytes: 1234 };
+const brief = { subject: 'a cat on a hill', style: 'watercolor', mood: 'calm', palette: ['#3a7bd5', '#f5d76e'], composition: 'cat centered' };
+const okBody = { brief };
 
 describe('readGenerateResponse', () => {
-  it('reads a 2xx reply with numbers as ok', () => {
-    expect(readGenerateResponse(200, okBody)).toEqual({ ok: true, width: 800, height: 600, bytes: 1234 });
+  it('reads a 2xx reply with a brief as ok', () => {
+    expect(readGenerateResponse(200, okBody)).toEqual({ ok: true, brief });
   });
 
   it.each([
-    ['missing width', { height: 1, bytes: 1 }],
-    ['missing height', { width: 1, bytes: 1 }],
-    ['missing bytes', { width: 1, height: 1 }],
-    ['NaN width', { ...okBody, width: NaN }],
-    ['Infinity height', { ...okBody, height: Infinity }],
-    ['string bytes', { ...okBody, bytes: '12' }],
+    ['no brief', {}],
+    ['a missing subject', { brief: { ...brief, subject: undefined } }],
+    ['an empty style', { brief: { ...brief, style: '   ' } }],
+    ['a numeric mood', { brief: { ...brief, mood: 5 } }],
+    ['a missing composition', { brief: { ...brief, composition: undefined } }],
+    ['a brief that is an array', { brief: [] }],
     ['null body', null],
     ['string body', 'ok'],
     ['array body', []],
   ])('is an error for a 2xx reply with %s', (_label, body) => {
-    const result = readGenerateResponse(200, body);
-    expect(result.ok).toBe(false);
+    expect(readGenerateResponse(200, body).ok).toBe(false);
+  });
+
+  it('keeps only palette entries that are #rrggbb colors, at most six', () => {
+    const palette = ['#000000', 'red', 'url(x)', 7, '#ABCDEF', '#1', '#111111', '#222222', '#333333', '#444444', '#555555'];
+    const result = readGenerateResponse(200, { brief: { ...brief, palette } });
+    expect(result).toEqual({ ok: true, brief: { ...brief, palette: ['#000000', '#ABCDEF', '#111111', '#222222', '#333333', '#444444'] } });
+  });
+
+  it('removes bidirectional-text controls that could reorder the line', () => {
+    const result = readGenerateResponse(200, { brief: { ...brief, subject: 'cat\u202Etxt.exe\u2066x\u2069' } });
+    expect(result.ok && result.brief.subject).toBe('cattxt.exex');
+  });
+
+  it('removes zero-width, tag, soft-hyphen and control characters, and line breaks', () => {
+    const subject = 'a\u061Cb\u200Bc\u{E0041}d\u00ADe\nf\u2028g';
+    const result = readGenerateResponse(200, { brief: { ...brief, subject } });
+    expect(result.ok && result.brief.subject).toBe('abcdefg');
+  });
+
+  it('never splits an emoji when capping', () => {
+    const subject = 'x'.repeat(299) + '\u{1F431}' + 'tail';
+    const result = readGenerateResponse(200, { brief: { ...brief, subject } });
+    expect(result.ok && Array.from(result.brief.subject)).toHaveLength(300);
+    expect(result.ok && result.brief.subject.endsWith('\u{1F431}')).toBe(true);
+  });
+
+  it('caps long brief text at 300 characters', () => {
+    const result = readGenerateResponse(200, { brief: { ...brief, subject: 's'.repeat(1000) } });
+    expect(result.ok && result.brief.subject.length).toBe(300);
   });
 
   it('uses the server error text for a non-2xx reply', () => {
@@ -77,7 +106,7 @@ describe('requestGenerate', () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(okBody), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     const result = await requestGenerate('room-1', png);
-    expect(result).toEqual({ ok: true, width: 800, height: 600, bytes: 1234 });
+    expect(result).toEqual({ ok: true, brief });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('/api/generate');
     expect(init.method).toBe('POST');

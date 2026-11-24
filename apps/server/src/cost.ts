@@ -37,6 +37,17 @@ export type PaidCallInfo = {
 
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
+// Thrown by a call that failed in a way the provider does not bill: it refused the request
+// itself (a 4xx such as a bad request, a bad key or a rate limit) or was overloaded. paidCall then
+// counts $0 instead of the estimate, so repeated rejections don't drain a room's budget.
+// Anything uncertain (a timeout, a dropped connection, a 500) must NOT use this.
+export class NotBilledError extends Error {
+  constructor(readonly status: number, options?: { cause?: unknown }) {
+    super(`The provider rejected the call (HTTP ${status}); it was not billed.`, options);
+    this.name = 'NotBilledError';
+  }
+}
+
 export class PaidCallTimeoutError extends Error {
   constructor(readonly timeoutMs: number) {
     super(`The call took longer than ${timeoutMs} ms.`);
@@ -112,10 +123,11 @@ export function createCostTracker({ limits, logPath, now = () => new Date() }: C
     try {
       paid = await withTimeout(info.timeoutMs, call);
     } catch (error) {
-      // Includes a timeout. Keep the estimate as spent: better to overcount by a cent than to
-      // undercount.
-      ledger.settle(reservation, info.estimateUsd);
-      await log(entry(info.estimateUsd, false));
+      // Includes a timeout. Keep the estimate as spent (better to overcount by a cent than to
+      // undercount), unless the call says the provider certainly didn't bill it.
+      const billed = error instanceof NotBilledError ? 0 : info.estimateUsd;
+      ledger.settle(reservation, billed);
+      await log(entry(billed, false));
       throw error;
     }
 
@@ -125,6 +137,12 @@ export function createCostTracker({ limits, logPath, now = () => new Date() }: C
       // lose a result we already paid for.
       console.error(`Invalid cost ${usd} for a ${info.kind} call; counting the estimate instead.`);
       usd = info.estimateUsd;
+    }
+    // Compared in whole micro-dollars, as the ledger counts, so float noise can't trigger it.
+    if (Math.round(usd * 1_000_000) > Math.round(info.estimateUsd * 1_000_000)) {
+      // Counted anyway (it's spent), but the cap could be overshot by the difference: the
+      // estimate for this kind of call is not a true upper bound and must be fixed.
+      console.warn(`A ${info.kind} call cost $${usd} but only $${info.estimateUsd} was reserved.`);
     }
     ledger.settle(reservation, usd);
     await log(entry(usd, true, paid));
