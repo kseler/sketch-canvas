@@ -1,14 +1,53 @@
-import { Hono } from 'hono';
+import { Hono, type MiddlewareHandler } from 'hono';
 import { cors } from 'hono/cors';
-import { generateRoute } from './generate';
+import { DEFAULT_ALLOWED_ORIGINS } from './config';
+import { createGenerateRoute } from './generate';
+import { createRoomLocks, type RoomLocks } from './roomLocks';
+
+export type AppOptions = {
+  // Web pages that may call the API from a browser. In development the web app goes through
+  // Vite's proxy, which keeps the page's Origin (http://localhost:5173), so that must be listed.
+  allowedOrigins?: string[];
+  locks?: RoomLocks;
+};
+
+// CORS alone does not stop a request: it only stops the browser from reading the answer, and it
+// asks first (a preflight) only for "non-simple" requests. A page on another site can still send
+// `fetch(ourUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: json })`
+// with no preflight, and the server would do the work (and, from chunk 3, spend money).
+// So every request that can change something must come from an allowed page (or from no page at
+// all, like curl), and must say it is JSON. Browsers always send Origin on a cross-site POST and
+// can't fake it. Deny by default: only the read-only methods skip the check, so a PUT or DELETE
+// route added later is covered without anyone remembering to add it here.
+const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+function postGuard(allowedOrigins: readonly string[]): MiddlewareHandler {
+  return async (c, next) => {
+    if (READ_ONLY_METHODS.has(c.req.method)) return next();
+    const origin = c.req.header('Origin');
+    if (origin !== undefined && !allowedOrigins.includes(origin)) {
+      return c.json({ error: 'This page may not use the API.' }, 403);
+    }
+    // Only application/json, which is never a "simple" type, so a browser can't send it from
+    // another site without the preflight that CORS then refuses.
+    const type = c.req.header('Content-Type') ?? '';
+    if (!/^application\/json\s*(;|$)/i.test(type)) {
+      return c.json({ error: 'Send the request as JSON.' }, 415);
+    }
+    return next();
+  };
+}
 
 // The HTTP routes, without starting a server, so tests can call them with app.request().
-export function createApp(): Hono {
+export function createApp({ allowedOrigins = DEFAULT_ALLOWED_ORIGINS, locks = createRoomLocks() }: AppOptions = {}): Hono {
   const app = new Hono();
-  // Open to every origin for now. Restrict to the web app's origin before the generate pipeline
-  // spends money (tracked in the security plan).
-  app.use('/api/*', cors());
+  // Lets the listed origins read our answers. Other sites can't read them, and can't send JSON
+  // without a preflight, which fails for them. CORS only binds browsers: curl or a script ignores
+  // it, which is what the rate limits and the invite code are for (Nov 30).
+  app.use('/api/*', cors({ origin: [...allowedOrigins] }));
+  // Covers /api/* only: every route that changes something must live under /api.
+  app.use('/api/*', postGuard(allowedOrigins));
   app.get('/api/health', (c) => c.json({ ok: true }));
-  app.route('/api/generate', generateRoute);
+  app.route('/api/generate', createGenerateRoute({ locks }));
   return app;
 }

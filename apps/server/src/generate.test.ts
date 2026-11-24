@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createApp } from './app';
+import { createRoomLocks, type RoomLocks } from './roomLocks';
 import { MAX_SKETCH_BYTES, MAX_SKETCH_SIDE } from './generate';
 
 const app = createApp();
@@ -167,5 +168,170 @@ describe('POST /api/generate', () => {
       expect(text).not.toContain('SECRET-MARKER');
       expect(text).not.toContain(Buffer.from(secret).toString('base64'));
     }
+  });
+});
+
+describe('POST /api/generate room lock', () => {
+  const lockedApp = (locks: RoomLocks) => createApp({ locks });
+  const send = (a: ReturnType<typeof createApp>, body: unknown) =>
+    a.request('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  it('refuses with 409 while the room is busy, and still serves other rooms', async () => {
+    const locks = createRoomLocks();
+    const a = lockedApp(locks);
+    const release = locks.tryAcquire('room-1');
+
+    const busy = await send(a, validBody);
+    expect(busy.status).toBe(409);
+    expect(typeof (await busy.json()).error).toBe('string');
+
+    const other = await send(a, { ...validBody, roomId: 'room-2' });
+    expect(other.status).toBe(200);
+
+    release?.();
+    expect((await send(a, validBody)).status).toBe(200);
+  });
+
+  it('does not free a lock held by someone else when it is refused', async () => {
+    const locks = createRoomLocks();
+    locks.tryAcquire('room-1');
+    await send(lockedApp(locks), validBody);
+    expect(locks.isBusy('room-1')).toBe(true);
+  });
+
+  it('frees the room once the request has finished', async () => {
+    const locks = createRoomLocks();
+    const res = await send(lockedApp(locks), validBody);
+    expect(res.status).toBe(200);
+    expect(locks.isBusy('room-1')).toBe(false);
+  });
+
+  it.each([
+    ['an invalid body (400)', { roomId: 'room-1' }, 400],
+    ['a non-PNG image (400)', { roomId: 'room-1', image: Buffer.from('hello hello hello').toString('base64') }, 400],
+    ['an oversize sketch (413)', { roomId: 'room-1', image: pngBase64(MAX_SKETCH_SIDE + 1, 1) }, 413],
+  ])('never takes the lock for %s', async (_label, body, status) => {
+    const locks = createRoomLocks();
+    const acquire = vi.spyOn(locks, 'tryAcquire');
+    const res = await send(lockedApp(locks), body);
+    expect(res.status).toBe(status);
+    expect(acquire).not.toHaveBeenCalled(); // not just "free afterwards": never taken at all
+  });
+});
+
+describe('CORS on /api', () => {
+  const preflight = (a: ReturnType<typeof createApp>, origin: string) =>
+    a.request('/api/generate', {
+      method: 'OPTIONS',
+      headers: { Origin: origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type' },
+    });
+
+  it('allows the default local web origin', async () => {
+    const res = await preflight(createApp(), 'http://localhost:5173');
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('http://localhost:5173');
+  });
+
+  it('does not allow an unknown origin', async () => {
+    const res = await preflight(createApp(), 'https://evil.example');
+    expect(res.headers.get('Access-Control-Allow-Origin')).not.toBe('https://evil.example');
+    expect(res.headers.get('Access-Control-Allow-Origin')).not.toBe('*');
+  });
+
+  it('does not add allow-origin to a real request from an unknown origin', async () => {
+    const res = await app.request('/api/health', { headers: { Origin: 'https://evil.example' } });
+    expect(res.headers.get('Access-Control-Allow-Origin')).not.toBe('https://evil.example');
+    expect(res.headers.get('Access-Control-Allow-Origin')).not.toBe('*');
+  });
+
+  it('uses the configured origins instead of the defaults', async () => {
+    const a = createApp({ allowedOrigins: ['https://sketch.example.com'] });
+    const ok = await preflight(a, 'https://sketch.example.com');
+    expect(ok.headers.get('Access-Control-Allow-Origin')).toBe('https://sketch.example.com');
+    const refused = await preflight(a, 'http://localhost:5173');
+    expect(refused.headers.get('Access-Control-Allow-Origin')).not.toBe('http://localhost:5173');
+  });
+
+  it('still serves a request without an Origin header (curl, scripts)', async () => {
+    const res = await post(JSON.stringify(validBody));
+    expect(res.status).toBe(200);
+  });
+});
+
+describe('POST guard against other sites', () => {
+  const validJson = JSON.stringify(validBody);
+
+  it('refuses a simple text/plain POST, which a browser sends cross-site without a preflight', async () => {
+    const locks = createRoomLocks();
+    const acquire = vi.spyOn(locks, 'tryAcquire');
+    const res = await createApp({ locks }).request('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: validJson,
+    });
+    expect(res.status).toBe(415);
+    expect(acquire).not.toHaveBeenCalled();
+  });
+
+  it.each(['', 'application/x-www-form-urlencoded', 'multipart/form-data', 'application/jsonp'])(
+    'refuses Content-Type %j with 415',
+    async (type) => {
+      const res = await app.request('/api/generate', {
+        method: 'POST',
+        headers: type ? { 'Content-Type': type } : {},
+        body: validJson,
+      });
+      expect(res.status).toBe(415);
+    },
+  );
+
+  it('accepts application/json with a charset', async () => {
+    const res = await post(validJson, { 'Content-Type': 'application/json; charset=utf-8' });
+    expect(res.status).toBe(200);
+  });
+
+  it('refuses a POST from a page on another site with 403, before taking the lock', async () => {
+    const locks = createRoomLocks();
+    const acquire = vi.spyOn(locks, 'tryAcquire');
+    const res = await createApp({ locks }).request('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example' },
+      body: validJson,
+    });
+    expect(res.status).toBe(403);
+    expect(acquire).not.toHaveBeenCalled();
+  });
+
+  it('accepts a POST from the allowed web page', async () => {
+    const res = await post(validJson, { 'Content-Type': 'application/json', Origin: 'http://localhost:5173' });
+    expect(res.status).toBe(200);
+  });
+});
+
+describe('guard is deny-by-default for methods', () => {
+  it('also covers a write route added later, e.g. a cross-site text/plain PUT', async () => {
+    const a = createApp();
+    a.put('/api/later', (c) => c.json({ ok: true })); // stands in for a future route
+    const fromEvil = await a.request('/api/later', {
+      method: 'PUT',
+      headers: { Origin: 'https://evil.example', 'Content-Type': 'text/plain' },
+      body: '{}',
+    });
+    expect(fromEvil.status).toBe(403);
+    const notJson = await a.request('/api/later', { method: 'DELETE', headers: { Origin: 'http://localhost:5173' } });
+    expect(notJson.status).toBe(415);
+  });
+
+  it('lets read-only requests through from any page', async () => {
+    const res = await app.request('/api/health', { headers: { Origin: 'https://evil.example' } });
+    expect(res.status).toBe(200);
+  });
+
+  it('refuses Origin: null (sandboxed iframes, file pages, cross-site redirects)', async () => {
+    const res = await post(JSON.stringify(validBody), { 'Content-Type': 'application/json', Origin: 'null' });
+    expect(res.status).toBe(403);
   });
 });
