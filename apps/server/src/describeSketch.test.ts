@@ -12,6 +12,7 @@ import {
   BRIEF_SYSTEM_PROMPT,
   BRIEF_TIMEOUT_MS,
   ANTHROPIC_API_URL,
+  PROMPT_OVERHEAD_TOKENS,
   anthropicBriefClient,
   createDescribeSketch,
   isNotBilled,
@@ -20,7 +21,7 @@ import {
 } from './describeSketch';
 import { estimateTextUsd, imageInputTokens, textCostUsd } from './pricing';
 
-const BRIEF = { subject: 'a cat on a hill', style: 'watercolor', mood: 'calm', palette: ['#3a7bd5'], composition: 'cat centered' };
+const BRIEF = { subject: 'a cat on a hill', style: 'watercolor', mood: 'calm', palette: ['#3a7bd5'], composition: 'cat centered', lettering: '' };
 const BRIEF_JSON = JSON.stringify(BRIEF);
 
 type Reply = Parameters<typeof readBrief>[0];
@@ -208,8 +209,8 @@ describe('createDescribeSketch', () => {
     const inputTokens = imageInputTokens(image.width, image.height) + 500; // image plus a prompt of 500 tokens
     const maximal = { input_tokens: inputTokens, output_tokens: BRIEF_MAX_TOKENS };
     const { client } = fakeClient(async () => message('end_turn', maximal));
-    // A room budget of exactly the 800x600 estimate (image + 2000 tokens of overhead + max_tokens out) lets the call run.
-    const estimate = estimateTextUsd(BRIEF_MODEL, { inputTokens: imageInputTokens(800, 600) + 2000, maxTokens: BRIEF_MAX_TOKENS });
+    // A room budget of exactly the 800x600 estimate (image + PROMPT_OVERHEAD_TOKENS + max_tokens out) lets the call run.
+    const estimate = estimateTextUsd(BRIEF_MODEL, { inputTokens: imageInputTokens(800, 600) + PROMPT_OVERHEAD_TOKENS, maxTokens: BRIEF_MAX_TOKENS });
     expect(textCostUsd(BRIEF_MODEL, { inputTokens, outputTokens: BRIEF_MAX_TOKENS })).toBeLessThanOrEqual(estimate);
     await createDescribeSketch({ client, costs: costs({ dailyUsd: 1, roomDailyUsd: estimate }) })(request);
     expect(console.warn).not.toHaveBeenCalled();
@@ -287,7 +288,7 @@ describe('createDescribeSketch', () => {
     const { client } = fakeClient(async () => { throw boom; });
     const tracker = costs();
     await expect(createDescribeSketch({ client, costs: tracker })(request)).rejects.toBe(boom);
-    const estimate = estimateTextUsd(BRIEF_MODEL, { inputTokens: imageInputTokens(800, 600) + 2000, maxTokens: BRIEF_MAX_TOKENS });
+    const estimate = estimateTextUsd(BRIEF_MODEL, { inputTokens: imageInputTokens(800, 600) + PROMPT_OVERHEAD_TOKENS, maxTokens: BRIEF_MAX_TOKENS });
     expect(tracker.spentUsd()).toBeCloseTo(estimate, 6);
     expect(tracker.spentUsd()).toBeGreaterThan(0);
     const [entry] = await readLog();
@@ -334,13 +335,14 @@ describe('anthropicBriefClient', () => {
 });
 
 describe('prompt overhead stays under the reserved margin', () => {
-  // The estimate reserves 2,000 tokens for everything except the image. A token is at least one
-  // byte, so the bytes of what we send bound its tokens; the rest is room for the API's own
-  // framing and the format instructions it adds. If this fails, raise PROMPT_OVERHEAD_TOKENS.
-  it('system prompt + schema + user text fit in 1,500 bytes', () => {
+  // The estimate reserves PROMPT_OVERHEAD_TOKENS for everything except the image. A token is at
+  // least one byte, so the bytes of what we send bound its tokens; the rest is room for the API's
+  // own framing and the format instructions it adds. If this fails, raise PROMPT_OVERHEAD_TOKENS.
+  it('system prompt + schema + user text fit in 3,000 bytes, 500 under the margin', () => {
+    expect(PROMPT_OVERHEAD_TOKENS - 3_000).toBeGreaterThanOrEqual(500);
     const bytes = (s: string) => new TextEncoder().encode(s).length;
     const total = bytes(BRIEF_SYSTEM_PROMPT) + bytes(JSON.stringify(SKETCH_BRIEF_JSON_SCHEMA)) + bytes('Write the brief for this sketch.');
-    expect(total).toBeLessThan(1_500);
+    expect(total).toBeLessThan(3_000);
   });
 
   it('uses the official API host, never one from the environment', () => {
