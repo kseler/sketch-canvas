@@ -1,5 +1,6 @@
 import { WebsocketProvider } from 'y-websocket';
 import * as Y from 'yjs';
+import { JOB_MAP } from '../lib/jobs';
 import type { Stroke } from '../types';
 
 // Awareness: short-lived per-person state (name, cursor, stroke in progress). Unlike the document,
@@ -12,6 +13,8 @@ export type Room = {
   strokes: Y.Array<Stroke>;
   // Generated pictures, written by the server. Unknown until checked (see lib/images.ts).
   images: Y.Array<unknown>;
+  // The room's generation job, written by the server. Unknown until checked (see lib/jobs.ts).
+  job: Y.Map<unknown>;
   awareness: Awareness;
   destroy: () => void;
 };
@@ -24,6 +27,7 @@ export function joinRoom(name: string): Room {
   const provider = new WebsocketProvider(WS_URL, name, doc);
   const strokes = doc.getArray<Stroke>('strokes');
   const images = doc.getArray<unknown>('images');
+  const job = doc.getMap<unknown>(JOB_MAP);
 
   // y-websocket does not announce leaving when a browser page closes, so others would keep seeing
   // us for up to 30s (the awareness timeout). Clearing our state on pagehide tells them right away.
@@ -44,6 +48,7 @@ export function joinRoom(name: string): Room {
     doc,
     strokes,
     images,
+    job,
     awareness: provider.awareness,
     destroy: () => {
       window.removeEventListener('pagehide', leave);

@@ -1,7 +1,7 @@
 import type { Server } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { docs, getYDoc, setupWSConnection } from 'y-websocket/bin/utils';
-import { guardImages } from './roomImages';
+import { docs, setupWSConnection } from 'y-websocket/bin/utils';
+import { ROOM_ID } from './roomId';
 
 // A broken frame from a client (bad bits, invalid UTF-8, too large) makes the ws library emit
 // 'error' on that socket. An 'error' event with no listener throws, and an uncaught throw stops
@@ -23,7 +23,10 @@ export function isRoomOpen(roomId: string): boolean {
 }
 
 // Yjs sync: one room per URL path, e.g. ws://localhost:1234/abc123
-export function attachYjsSync(server: Server): WebSocketServer {
+// `openRoom` runs for every new connection, before the tab's first update can arrive: it guards
+// the parts of the room only the server may write (pictures, the job) and puts back what the
+// server had before a restart.
+export function attachYjsSync(server: Server, openRoom: (roomId: string) => void): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
   wss.on('connection', (ws, req) => {
     dropOnError(ws); // first, before anything else can emit
@@ -32,8 +35,14 @@ export function attachYjsSync(server: Server): WebSocketServer {
     // process may be broken, and crashing so a supervisor restarts it is safer.)
     try {
       // The same room name setupWSConnection uses: the URL path without the leading slash or query.
-      // Guard the room's pictures before the first peer update can arrive.
-      guardImages(getYDoc(roomNameFromUrl(req.url)));
+      // Only room names the web app makes (and /api/generate accepts). Anything else would still
+      // get its own document in memory, kept for good: refuse it before one is made.
+      const roomId = roomNameFromUrl(req.url);
+      if (!ROOM_ID.test(roomId)) {
+        ws.terminate();
+        return;
+      }
+      openRoom(roomId);
       setupWSConnection(ws, req);
     } catch {
       ws.terminate();

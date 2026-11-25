@@ -7,128 +7,49 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const brief = { subject: 'a cat on a hill', style: 'watercolor', mood: 'calm', palette: ['#3a7bd5', '#f5d76e'], composition: 'cat centered', lettering: '' };
-const okBody = { brief };
+const JOB_ID = '3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b';
 
 describe('readGenerateResponse', () => {
-  it('reads a 2xx reply with a brief as ok', () => {
-    expect(readGenerateResponse(200, okBody)).toEqual({ ok: true, brief, picture: false });
+  it('reads a 202 reply with a job id as started', () => {
+    expect(readGenerateResponse(202, { jobId: JOB_ID })).toEqual({ ok: true, jobId: JOB_ID });
   });
 
   it.each([
-    ['no brief', {}],
-    ['a missing subject', { brief: { ...brief, subject: undefined } }],
-    ['an empty style', { brief: { ...brief, style: '   ' } }],
-    ['a numeric mood', { brief: { ...brief, mood: 5 } }],
-    ['a missing composition', { brief: { ...brief, composition: undefined } }],
-    ['a brief that is an array', { brief: [] }],
-    ['null body', null],
-    ['string body', 'ok'],
-    ['array body', []],
-  ])('is an error for a 2xx reply with %s', (_label, body) => {
-    expect(readGenerateResponse(200, body).ok).toBe(false);
+    ['a 200 instead of 202', 200, { jobId: JOB_ID }],
+    ['no job id', 202, {}],
+    ['an empty job id', 202, { jobId: '' }],
+    ['a numeric job id', 202, { jobId: 5 }],
+    ['a job id over 64 characters', 202, { jobId: 'x'.repeat(65) }],
+    ['a null body', 202, null],
+    ['a string body', 202, 'ok'],
+    ['an array body', 202, [JOB_ID]],
+  ])('is an error for %s', (_label, status, body) => {
+    expect(readGenerateResponse(status, body).ok).toBe(false);
   });
 
-  it('keeps only palette entries that are #rrggbb colors, at most six', () => {
-    const palette = ['#000000', 'red', 'url(x)', 7, '#ABCDEF', '#1', '#111111', '#222222', '#333333', '#444444', '#555555'];
-    const result = readGenerateResponse(200, { brief: { ...brief, palette } });
-    expect(result).toEqual({ ok: true, brief: { ...brief, palette: ['#000000', '#ABCDEF', '#111111', '#222222', '#333333', '#444444'] }, picture: false });
-  });
-
-  it('removes bidirectional-text controls that could reorder the line', () => {
-    const result = readGenerateResponse(200, { brief: { ...brief, subject: 'cat\u202Etxt.exe\u2066x\u2069' } });
-    expect(result.ok && result.brief.subject).toBe('cattxt.exex');
-  });
-
-  it('removes zero-width, tag and soft-hyphen characters, and turns line breaks into spaces (like the server)', () => {
-    const subject = 'a\u061Cb\u200Bc\u{E0041}d\u00ADe\nf\u2028g';
-    const result = readGenerateResponse(200, { brief: { ...brief, subject } });
-    expect(result.ok && result.brief.subject).toBe('abcde f g');
-  });
-
-  it('turns control characters that are not whitespace (escape, bell) into spaces', () => {
-    const result = readGenerateResponse(200, { brief: { ...brief, subject: 'a\u001Bb\u0007c' } });
-    expect(result.ok && result.brief.subject).toBe('a b c');
-  });
-
-  it('cleans like the server: folds fullwidth lookalikes and removes blank filler letters', () => {
-    const result = readGenerateResponse(200, { brief: { ...brief, subject: 'ＦＲＥＥ\u3164 cat' } });
-    expect(result.ok && result.brief.subject).toBe('FREE cat');
-  });
-
-  it('never splits a character when capping the lettering', () => {
-    // U+20000 is a CJK letter outside the basic plane (two UTF-16 units) that NFKC leaves alone.
-    const lettering = 'a'.repeat(23) + '\u{20000}' + 'b';
-    const result = readGenerateResponse(200, { brief: { ...brief, lettering } });
-    expect(result.ok && result.brief.lettering).toBe('a'.repeat(23) + '\u{20000}');
-  });
-
-  it('never splits an emoji when capping', () => {
-    const subject = 'x'.repeat(299) + '\u{1F431}' + 'tail';
-    const result = readGenerateResponse(200, { brief: { ...brief, subject } });
-    expect(result.ok && Array.from(result.brief.subject)).toHaveLength(300);
-    expect(result.ok && result.brief.subject.endsWith('\u{1F431}')).toBe(true);
-  });
-
-  it('caps long brief text at 300 characters', () => {
-    const result = readGenerateResponse(200, { brief: { ...brief, subject: 's'.repeat(1000) } });
-    expect(result.ok && result.brief.subject.length).toBe(300);
-  });
-
-  describe('lettering', () => {
-    const letter = (lettering: unknown) => {
-      const result = readGenerateResponse(200, { brief: { ...brief, lettering } });
-      return result.ok ? result.brief.lettering : null;
-    };
-
-    it('keeps lettering as sent', () => {
-      expect(letter('OPEN')).toBe('OPEN');
-    });
-
-    it('becomes an empty string when missing', () => {
-      const { lettering: _omit, ...withoutLettering } = brief;
-      const result = readGenerateResponse(200, { brief: withoutLettering });
-      expect(result).toEqual({ ok: true, brief: { ...brief, lettering: '' }, picture: false });
-    });
-
-    it.each([[5], [null], [{}], [['a']], [true]])('becomes an empty string for non-string %j', (value) => {
-      expect(letter(value)).toBe('');
-    });
-
-    it('removes invisible characters and trims', () => {
-      expect(letter('  OP\u200BEN\u202E \n')).toBe('OPEN');
-    });
-
-    it('caps at 24 characters (the server limit)', () => {
-      expect(letter('a'.repeat(25))).toBe('a'.repeat(24));
-      expect(letter('a'.repeat(24))).toBe('a'.repeat(24));
-    });
-
-    it('does not make the brief fail when lettering is bad', () => {
-      expect(readGenerateResponse(200, { brief: { ...brief, lettering: 5 } }).ok).toBe(true);
-    });
-  });
-
-  it('uses the server error text for a non-2xx reply', () => {
-    expect(readGenerateResponse(413, { error: 'The sketch is too large.' })).toEqual({
+  it('uses the server error text for an error reply', () => {
+    expect(readGenerateResponse(409, { error: 'A picture is already being generated in this room.' })).toEqual({
       ok: false,
-      error: 'The sketch is too large.',
+      error: 'A picture is already being generated in this room.',
     });
   });
 
-  it('does not trust numbers in a non-2xx reply', () => {
-    expect(readGenerateResponse(500, okBody).ok).toBe(false);
-  });
-
-  it('names the HTTP status when a non-2xx reply has no error text', () => {
+  it('names the HTTP status when an error reply has no usable error text', () => {
     expect(readGenerateResponse(502, null)).toEqual({ ok: false, error: 'Generate failed (HTTP 502).' });
     expect(readGenerateResponse(500, { error: 42 })).toEqual({ ok: false, error: 'Generate failed (HTTP 500).' });
+    expect(readGenerateResponse(500, { error: ' \u200B ' })).toEqual({ ok: false, error: 'Generate failed (HTTP 500).' });
     expect(readGenerateResponse(500, 'oops')).toEqual({ ok: false, error: 'Generate failed (HTTP 500).' });
   });
 
-  it('caps long error text at 200 characters', () => {
-    const result = readGenerateResponse(500, { error: 'x'.repeat(5000) });
-    expect(result).toEqual({ ok: false, error: 'x'.repeat(200) });
+  it('ignores error text in a reply that is not an error status', () => {
+    expect(readGenerateResponse(200, { error: 'Everything is broken, call this number' })).toEqual({ ok: false, error: 'Generate failed (HTTP 200).' });
+  });
+
+  it('cleans and caps error text at 200 characters, never splitting a character', () => {
+    expect(readGenerateResponse(500, { error: 'x'.repeat(5000) })).toEqual({ ok: false, error: 'x'.repeat(200) });
+    expect(readGenerateResponse(500, { error: 'bad\u202Etext\nhere' })).toEqual({ ok: false, error: 'badtext here' });
+    const error = readGenerateResponse(500, { error: 'x'.repeat(199) + '\u{1F431}tail' });
+    expect(error).toEqual({ ok: false, error: 'x'.repeat(199) + '\u{1F431}' });
   });
 });
 
@@ -154,10 +75,10 @@ describe('requestGenerate', () => {
   const png = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' });
 
   it('posts the room id and the base64 sketch as JSON', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(okBody), { status: 200 }));
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ jobId: JOB_ID }), { status: 202 }));
     vi.stubGlobal('fetch', fetchMock);
     const result = await requestGenerate('room-1', png);
-    expect(result).toEqual({ ok: true, brief, picture: false });
+    expect(result).toEqual({ ok: true, jobId: JOB_ID });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('/api/generate');
     expect(init.method).toBe('POST');
@@ -174,8 +95,8 @@ describe('requestGenerate', () => {
     expect(await requestGenerate('room-1', png)).toEqual({ ok: false, error: 'Generate failed (HTTP 502).' });
   });
 
-  it('returns ok:false when a 200 reply is not JSON', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('fine', { status: 200 })));
+  it('returns ok:false when a 202 reply is not JSON', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('fine', { status: 202 })));
     expect((await requestGenerate('room-1', png)).ok).toBe(false);
   });
 
@@ -199,11 +120,11 @@ describe('requestGenerate', () => {
     timeoutSpy.mockRestore();
   });
 
-  // A fetch whose headers arrive (status 200) but whose body never finishes, until the signal aborts.
+  // A fetch whose headers arrive (status 202) but whose body never finishes, until the signal aborts.
   const stallingBodyFetch = () =>
     vi.fn((_url: string, init: RequestInit) =>
       Promise.resolve({
-        status: 200,
+        status: 202,
         json: () =>
           new Promise<unknown>((_resolve, reject) => {
             init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
@@ -211,7 +132,7 @@ describe('requestGenerate', () => {
       } as Response),
     );
 
-  it('reports a timeout that fires while the body is still arriving, not "HTTP 200"', async () => {
+  it('reports a timeout that fires while the body is still arriving, not "HTTP 202"', async () => {
     const timer = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timer.signal);
     vi.stubGlobal('fetch', stallingBodyFetch());
@@ -238,13 +159,5 @@ describe('requestGenerate', () => {
     await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
     caller.abort();
     expect(await pending).toEqual({ ok: false, error: 'Cancelled.' });
-  });
-});
-
-describe('picture flag', () => {
-  it('is true when the reply carries an image record, false otherwise', () => {
-    expect(readGenerateResponse(200, { brief, image: { id: 'x' } })).toMatchObject({ ok: true, picture: true });
-    expect(readGenerateResponse(200, { brief, image: null })).toMatchObject({ ok: true, picture: false });
-    expect(readGenerateResponse(200, { brief })).toMatchObject({ ok: true, picture: false });
   });
 });

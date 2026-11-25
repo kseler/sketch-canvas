@@ -6,7 +6,7 @@ import type { ImageRecord, RoomImages } from './roomImages';
 
 // From a checked brief to a picture on everyone's canvas, in order:
 // prompt (free) → moderation (free, fails closed) → image (paid, through paidCall) → stored on our
-// server → small record into the room's Yjs document. Any step that fails stops the rest: no
+// server → logged and a small record into the room's Yjs document. Any step that fails stops the rest: no
 // picture is paid for unless the check passed, and none is shared unless it was stored.
 
 export type CheckContent = (text: string) => Promise<void>;
@@ -28,7 +28,7 @@ export function createMakePicture(deps: {
   checkContent: CheckContent;
   generateImage: GenerateImage;
   store: ImageStore;
-  rooms: RoomImages;
+  rooms: Pick<RoomImages, 'add'>;
   now?: () => Date;
 }): MakePicture {
   const now = deps.now ?? (() => new Date());
@@ -39,7 +39,7 @@ export function createMakePicture(deps: {
     try {
       const { id, url } = await deps.store.save(picture.png);
       const record: ImageRecord = { kind: 'image', id, url, ...area, createdAt: now().toISOString() };
-      deps.rooms.add(roomId, record);
+      await deps.rooms.add(roomId, record);
       return record;
     } catch (error) {
       throw new PictureStorageError({ cause: error });

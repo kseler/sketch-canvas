@@ -10,11 +10,12 @@ const fakeDescribe: DescribeSketch = async (request) => {
 };
 
 
-// The server repeats the web rule isValidRoomId (apps/web/src/lib/roomId.ts) in generate.ts. These are
+// The server repeats the web rule isValidRoomId (apps/web/src/lib/roomId.ts) in roomId.ts. These are
 // the same accept/reject cases as apps/web/src/lib/roomId.test.ts: change one side, and update both.
-// Seen through POST /api/generate, since the rule is not exported.
+// Seen through POST /api/generate, where the rule guards every paid call.
 
-const app = createApp({ describeSketch: fakeDescribe });
+// A job that records nothing: these tests only look at the answer to the request.
+const app = createApp({ describeSketch: fakeDescribe, jobs: { open: () => {}, start: () => 'job-1', finish: () => {} } });
 const image = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 8, 0, 0, 0, 8,
   8, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -31,7 +32,7 @@ const status = async (roomId: string) =>
 
 describe('server room id rule (parity with the web isValidRoomId)', () => {
   it.each(['abc123', 'a', 'my-room', '0123456789', 'a'.repeat(64)])('accepts %j', async (value) => {
-    expect(await status(value)).toBe(200);
+    expect(await status(value)).toBe(202);
   });
 
   it.each([

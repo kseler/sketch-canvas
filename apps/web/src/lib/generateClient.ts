@@ -1,12 +1,12 @@
+import { asRecord, capChars, cleanText } from './brief';
+
 // Talks to POST /api/generate. The server holds the API keys and makes the paid calls; the browser
-// only sends the sketch and shows what comes back.
+// only sends the sketch.
 
-// The brief the server's vision step wrote for the sketch. The picture itself reaches every tab
-// through the room's shared document; the reply only says whether one was made.
-// `lettering`: words the picture will show, or '' for none.
-export type Brief = { subject: string; style: string; mood: string; palette: string[]; composition: string; lettering: string };
-
-export type GenerateResult = { ok: true; brief: Brief; picture: boolean } | { ok: false; error: string };
+// The answer says only that the job started. How it goes (running, done, failed) reaches every tab
+// in the room through the shared document (lib/jobs.ts), not through this reply, so everyone sees
+// the same thing as the person who clicked.
+export type GenerateResult = { ok: true; jobId: string } | { ok: false; error: string };
 
 // The PNG as base64 without the "data:image/png;base64," prefix.
 export function blobToBase64(blob: Blob): Promise<string> {
@@ -21,61 +21,21 @@ export function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
-const asRecord = (v: unknown): Record<string, unknown> =>
-  typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
-// Invisible characters: format characters (bidi controls like U+202E that visually reorder a line,
-// zero-width characters, soft hyphens, invisible "tag" characters), control characters (newlines,
-// tabs) and line/paragraph separators. Text drawn on the canvas can steer the model into writing
-// them, and the brief is shown as one line.
-const FORMAT_CHARS = /[\p{Cf}\u115F\u1160\u3164\uFFA0]/gu;
-const LINE_BREAKERS = /[\p{Cc}\u2028\u2029]/gu;
-
-// Display text from the server, capped: the server validates the brief, but the browser doesn't
-// assume it (a proxy or an older server could answer anything). 300 = the server's longest brief
-// field (BRIEF_LIMITS.composition in apps/server/src/brief.ts, which the web app can't import).
-function cleanText(v: unknown): string | null {
-  if (typeof v !== 'string') return null;
-  // Same cleaning as the server's cleanBriefText: invisible characters go, line breaks become spaces.
-  const text = v
-    .normalize('NFKC')
-    .replace(FORMAT_CHARS, '')
-    .replace(LINE_BREAKERS, ' ')
-    .replace(/[\u2018\u2019\u02BC]/g, "'")
-    .replace(/[\u2010-\u2015\u2212]/g, '-')
-    .replace(/\s+/g, ' ')
-    .trim();
-  // By code point, not UTF-16 unit, so the cap never splits an emoji in half.
-  return text === '' ? null : Array.from(text).slice(0, 300).join('');
-}
-
-function readBrief(value: unknown): Brief | null {
-  const b = asRecord(value);
-  const subject = cleanText(b.subject);
-  const style = cleanText(b.style);
-  const mood = cleanText(b.mood);
-  const composition = cleanText(b.composition);
-  const palette = Array.isArray(b.palette) ? b.palette.filter((c): c is string => typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c)).slice(0, 6) : [];
-  if (!subject || !style || !mood || !composition) return null;
-  // Optional: missing or empty means no words. Capped at the server's limit (BRIEF_LIMITS.lettering,
-  // 24 characters); the server drops longer lettering, this only guards the display.
-  const lettering = Array.from(cleanText(b.lettering) ?? '').slice(0, 24).join('');
-  return { subject, style, mood, palette, composition, lettering };
-}
-
 // The response is read defensively: a proxy error page or a crashed server must not break the UI.
 export function readGenerateResponse(status: number, body: unknown): GenerateResult {
   const b = asRecord(body);
-  const brief = status >= 200 && status < 300 ? readBrief(b.brief) : null;
-  if (brief) return { ok: true, brief, picture: typeof b.image === 'object' && b.image !== null };
-  const error = typeof b.error === 'string' ? b.error.slice(0, 200) : `Generate failed (HTTP ${status}).`;
-  return { ok: false, error };
+  // 202 Accepted: the server took the job. Its id is ours to compare, never shown.
+  if (status === 202 && typeof b.jobId === 'string' && b.jobId.length > 0 && b.jobId.length <= 64) {
+    return { ok: true, jobId: b.jobId };
+  }
+  const error = status >= 400 ? cleanText(b.error) : null;
+  return { ok: false, error: error ? capChars(error, 200) : `Generate failed (HTTP ${status}).` };
 }
 
-// A hung server must not leave the Generate button disabled forever. Longer than the server's own
-// limits on the AI calls (BRIEF_TIMEOUT_MS 30 s + MODERATION_TIMEOUT_MS 10 s + IMAGE_TIMEOUT_MS
-// 120 s on the server), so the server's clearer error arrives first. Chunk 6 replaces this long
-// wait with a job.
-export const REQUEST_TIMEOUT_MS = 180_000;
+// A hung server must not leave the Generate button disabled forever. The server answers as soon as
+// it has checked the sketch and started the job (the AI calls run after the answer), so this only
+// covers uploading up to 1 MB and the checks.
+export const REQUEST_TIMEOUT_MS = 30_000;
 
 // Why the request stopped early, or null if it wasn't stopped. The timeout is checked first, so a
 // caller's cancel that happens after the timeout still reads as a timeout.
