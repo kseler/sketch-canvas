@@ -143,7 +143,7 @@ export function createGenerateRoute({
   // The work of one job. Never rejects: every way it can end is written into the job, and the
   // room's lock (and its place among the running jobs) is given back however it ends.
   async function run(describe: DescribeSketch, job: { roomId: string; id: string; image: SketchImage }, release: () => void): Promise<void> {
-    let outcome: JobOutcome = { status: 'failed', error: FALLBACK_FAILURE };
+    let outcome: JobOutcome;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       try {

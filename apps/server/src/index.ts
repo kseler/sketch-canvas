@@ -1,17 +1,14 @@
 import type { Server } from 'node:http';
 import { loadEnvFile } from 'node:process';
 import { fileURLToPath } from 'node:url';
-import Anthropic from '@anthropic-ai/sdk';
 import { serve } from '@hono/node-server';
-import OpenAI from 'openai';
 import { getYDoc } from 'y-websocket/bin/utils';
 import { createApp } from './app';
 import { readAllowedOrigins, readBudgetLimits } from './config';
 import { createCostTracker } from './cost';
-import { ANTHROPIC_API_URL, anthropicBriefClient, createDescribeSketch } from './describeSketch';
-import { createGenerateImage, OPENAI_API_URL, openAiImageClient } from './generateImage';
+import { createDescribeSketchForKey } from './describeSketch';
+import { createPictureCallsForKey } from './generateImage';
 import { createImageStore } from './imageStore';
-import { checkContent, openAiModerationClient } from './moderation';
 import { createMakePicture, type MakePicture } from './picture';
 import { createRoomImages } from './roomImages';
 import { createRoomJobs } from './roomJobs';
@@ -46,7 +43,7 @@ console.log(
 // canvas still works and Generate answers 503.
 const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
 const describeSketch = apiKey
-  ? createDescribeSketch({ client: anthropicBriefClient(new Anthropic({ apiKey, baseURL: ANTHROPIC_API_URL })), costs })
+  ? createDescribeSketchForKey(apiKey, costs)
   : undefined;
 if (!describeSketch) console.warn('ANTHROPIC_API_KEY is not set: Generate is off.');
 // The SDKs' debug logs print whole requests: every player's sketch (ANTHROPIC_LOG), every image
@@ -79,13 +76,8 @@ const images = createImageStore(fileURLToPath(new URL('../data/images', import.m
 const imageKey = process.env.IMAGE_API_KEY?.trim();
 let makePicture: MakePicture | undefined;
 if (imageKey) {
-  // organization/project/webhookSecret set to null so stray OPENAI_* variables in the environment
-  // can't bill another project or add headers.
-  const openai = new OpenAI({ apiKey: imageKey, baseURL: OPENAI_API_URL, organization: null, project: null, webhookSecret: null });
-  const moderation = openAiModerationClient(openai);
   makePicture = createMakePicture({
-    checkContent: (text) => checkContent(moderation, text),
-    generateImage: createGenerateImage({ client: openAiImageClient(openai), costs }),
+    ...createPictureCallsForKey(imageKey, costs),
     store: images,
     rooms: roomImages,
   });

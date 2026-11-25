@@ -15,9 +15,10 @@ control, evals and guardrails. The day-by-day plan is in the doc linked from REA
 
 - `pnpm install` at the repo root (pnpm workspaces, see pnpm-workspace.yaml)
 - `pnpm dev` starts web (http://localhost:5173) and server (http://localhost:1234)
-- `pnpm typecheck` and `pnpm test` must pass before any commit
-- `pnpm build` builds the web app
-- CI (`.github/workflows/ci.yml`) runs install, typecheck, test and build on every PR and push to main
+- `pnpm lint`, `pnpm typecheck` and `pnpm test` must pass before any commit
+- `pnpm build` builds the web app; `pnpm scan:bundle` then fails if the bundle contains a key
+- CI (`.github/workflows/ci.yml`) runs install, lint, typecheck, test, build and the bundle scan on
+  every PR and push to main
 
 ## Rules for working in this repo
 
@@ -25,7 +26,9 @@ control, evals and guardrails. The day-by-day plan is in the doc linked from REA
 2. Every model output is validated with zod before it is used (see apps/server/src/brief.ts).
 3. Every paid call (vision or image) goes through one wrapper, `paidCall` in apps/server/src/cost.ts:
    it reserves the estimated cost against the daily caps before the call and logs the real cost to
-   `cost-log.jsonl` after it. No paid call may bypass it.
+   `cost-log.jsonl` after it. No paid call may bypass it. ESLint enforces this: only the AI wrappers
+   (`describeSketch.ts`, `generateImage.ts`, `moderation.ts`) may import an AI SDK
+   (`eslint.config.js`, checked by `apps/server/src/lintRules.test.ts`).
 4. Development uses the cheapest image tier. Higher tiers only for the evals.
 5. Keep functions small and typed. No `any` without a comment saying why.
 6. Do not add dependencies without saying why in the commit message.

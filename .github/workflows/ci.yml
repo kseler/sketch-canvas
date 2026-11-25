@@ -40,6 +40,10 @@ jobs:
       # --frozen-lockfile: fail instead of silently updating pnpm-lock.yaml, so CI tests exactly
       # what is committed.
       - run: pnpm install --frozen-lockfile
+      # Type-aware lint, including the money rule: only the AI wrappers may import an AI SDK.
+      - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      # Fails if the built web bundle (what every visitor downloads) contains a key or a key's name.
+      - run: pnpm scan:bundle

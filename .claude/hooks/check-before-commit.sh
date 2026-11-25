@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Claude Code PreToolUse hook (registered in .claude/settings.json).
-# Enforces CLAUDE.md's "pnpm typecheck and pnpm test must pass before any commit": before Claude
-# runs a Bash command that contains `git commit`, run both, and block the command if either fails.
+# Enforces CLAUDE.md's "pnpm lint, pnpm typecheck and pnpm test must pass before any commit": before
+# Claude runs a Bash command that contains `git commit`, run all three, and block it if one fails.
 #
 # Input: the tool call as JSON on stdin. Exit 0 = let the command run. Exit 2 = block it; what we
 # print on stderr is shown to Claude so it can fix the problem.
@@ -23,9 +23,9 @@ fi
 
 cd "${CLAUDE_PROJECT_DIR:-.}" || exit 2
 
-if ! output=$(pnpm typecheck 2>&1 && pnpm test 2>&1); then
+if ! output=$(pnpm lint 2>&1 && pnpm typecheck 2>&1 && pnpm test 2>&1); then
   {
-    echo "Commit blocked by .claude/hooks/check-before-commit.sh: pnpm typecheck or pnpm test failed."
+    echo "Commit blocked by .claude/hooks/check-before-commit.sh: pnpm lint, typecheck or test failed."
     echo "Fix the failures, then commit again. Last lines of the output:"
     tail -n 40 <<<"$output"
   } >&2

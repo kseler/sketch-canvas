@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { checkContent, openAiModerationClient } from './moderation';
 import { NotBilledError, type CostTracker } from './cost';
 import { decodeBase64, readPngInfo } from './png';
 import { imageCostUsd, type ImageModel } from './pricing';
@@ -52,6 +53,20 @@ export type ImageClient = {
 // stops the request when it fires.
 export function openAiImageClient(client: OpenAI): ImageClient {
   return { generate: (body, signal) => client.images.generate(body, { signal, maxRetries: 0 }) };
+}
+
+// The picture's two OpenAI calls for a key, as the server uses them: the free moderation check
+// (its own timeout, fails closed; free, so not through paidCall) and the paid image call (through
+// paidCall). The client is made here and never handed out (eslint.config.js). organization,
+// project and webhookSecret are null so stray OPENAI_* variables in the environment can't bill
+// another project or add headers.
+export function createPictureCallsForKey(apiKey: string, costs: CostTracker): { checkContent: (text: string) => Promise<void>; generateImage: GenerateImage } {
+  const openai = new OpenAI({ apiKey, baseURL: OPENAI_API_URL, organization: null, project: null, webhookSecret: null });
+  const moderation = openAiModerationClient(openai);
+  return {
+    checkContent: (text) => checkContent(moderation, text),
+    generateImage: createGenerateImage({ client: openAiImageClient(openai), costs }),
+  };
 }
 
 // Not billed, and not something a player can cause: our key or setup (401, 403, 404), or a rate

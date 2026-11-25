@@ -65,10 +65,11 @@ export class PaidCallTimeoutError extends Error {
 // even if the call ignores its signal.
 async function withTimeout<T>(timeoutMs: number, call: (signal: AbortSignal) => Promise<T>): Promise<T> {
   const controller = new AbortController();
+  const timeout = new PaidCallTimeoutError(timeoutMs);
   const timedOut = new Promise<never>((_resolve, reject) => {
-    controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true });
+    controller.signal.addEventListener('abort', () => reject(timeout), { once: true });
   });
-  const timer = setTimeout(() => controller.abort(new PaidCallTimeoutError(timeoutMs)), timeoutMs);
+  const timer = setTimeout(() => controller.abort(timeout), timeoutMs);
   // `async` so a call that throws before returning a promise is caught like any other failure.
   const pending = (async () => call(controller.signal))();
   // After a timeout nobody waits for `pending`; a late rejection must not crash the process.
@@ -184,7 +185,7 @@ export function createCostTracker({ limits, logPath, now = () => new Date() }: C
     return { counted, skipped };
   }
 
-  return { paidCall, loadToday, spentUsd: ledger.spentUsd };
+  return { paidCall, loadToday, spentUsd: (roomId?: string) => ledger.spentUsd(roomId) };
 }
 
 export type CostTracker = ReturnType<typeof createCostTracker>;

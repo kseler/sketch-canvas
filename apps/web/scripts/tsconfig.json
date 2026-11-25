@@ -1,0 +1,10 @@
+{
+  // Build-time scripts run by Node, not shipped to the browser: Node's types, no DOM. Kept apart
+  // from the app's tsconfig so web code can't reach for Node APIs.
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "allowImportingTsExtensions": true
+  },
+  "include": ["."]
+}

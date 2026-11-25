@@ -14,8 +14,8 @@ import {
 export function useIdentity(): [Identity, (name: string) => void] {
   const [identity, setIdentity] = useState<Identity>(loadIdentity);
   // The latest identity for event handlers and rename, without re-creating them on every change.
+  // `update` is the only place the identity changes, and it keeps this in step.
   const current = useRef(identity);
-  current.current = identity;
 
   // Only update (and so re-announce in awareness) when something actually changed.
   const update = useCallback((next: Identity) => {

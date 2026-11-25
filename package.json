@@ -6,11 +6,18 @@
   "scripts": {
     "dev": "concurrently -n web,server -c blue,green \"pnpm --filter @sketch/web dev\" \"pnpm --filter @sketch/server dev\"",
     "build": "pnpm --filter @sketch/web build",
+    "scan:bundle": "pnpm --filter @sketch/web scan:bundle",
     "typecheck": "pnpm -r typecheck",
+    "lint": "eslint .",
     "test": "pnpm -r --if-present test"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "concurrently": "^10.0.7",
-    "typescript": "^7.0.2"
+    "eslint": "^10.15.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.14.0",
+    "typescript": "^7.0.2",
+    "typescript-eslint": "^8.74.0"
   }
 }

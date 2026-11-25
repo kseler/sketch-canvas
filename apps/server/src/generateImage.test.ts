@@ -288,7 +288,7 @@ describe('readGeneratedImage', () => {
     expect(readGeneratedImage(reply(pngBase64(4096, 4096)))).toMatchObject({ width: 4096, height: 4096 });
   });
   it('returns null when there is no data at all', () => {
-    expect(readGeneratedImage({} as Pick<OpenAI.ImagesResponse, 'data'>)).toBeNull();
+    expect(readGeneratedImage({})).toBeNull();
   });
 });
 

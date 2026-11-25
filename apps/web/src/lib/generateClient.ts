@@ -13,7 +13,7 @@ export function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
-      const url = String(reader.result);
+      const url = typeof reader.result === 'string' ? reader.result : '';
       resolve(url.slice(url.indexOf(',') + 1));
     };
     reader.onerror = () => reject(reader.error ?? new Error('Could not read the sketch.'));
