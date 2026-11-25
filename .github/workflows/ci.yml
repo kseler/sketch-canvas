@@ -45,5 +45,10 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
-      # Fails if the built web bundle (what every visitor downloads) contains a key or a key's name.
-      - run: pnpm scan:bundle
+      # Keys stay on the server (CLAUDE.md rule 1). The built web bundle is what every visitor
+      # downloads: fail if it holds an Anthropic or OpenAI key, or the name of one of our key
+      # variables. -l prints only the file names, never the key.
+      - name: No keys in the web bundle
+        run: |
+          test -d apps/web/dist
+          ! grep -rElI 'sk-ant-|sk-(proj|svcacct|admin)-|(ANTHROPIC|IMAGE|OPENAI)_API_KEY' apps/web/dist

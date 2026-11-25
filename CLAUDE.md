@@ -16,9 +16,9 @@ control, evals and guardrails. The day-by-day plan is in the doc linked from REA
 - `pnpm install` at the repo root (pnpm workspaces, see pnpm-workspace.yaml)
 - `pnpm dev` starts web (http://localhost:5173) and server (http://localhost:1234)
 - `pnpm lint`, `pnpm typecheck` and `pnpm test` must pass before any commit
-- `pnpm build` builds the web app; `pnpm scan:bundle` then fails if the bundle contains a key
-- CI (`.github/workflows/ci.yml`) runs install, lint, typecheck, test, build and the bundle scan on
-  every PR and push to main
+- `pnpm build` builds the web app
+- CI (`.github/workflows/ci.yml`) runs install, lint, typecheck, test and build on every PR and push
+  to main, then fails if the built web bundle contains a key
 
 ## Rules for working in this repo
 

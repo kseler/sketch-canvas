@@ -108,9 +108,9 @@ export default defineConfig(
     rules: { '@typescript-eslint/no-require-imports': 'off' },
   },
 
-  // Node code: the server, and the web app's build scripts.
+  // The server: Node.
   {
-    files: ['apps/server/**/*.ts', 'apps/web/scripts/**/*.ts'],
+    files: ['apps/server/**/*.ts'],
     languageOptions: { globals: globals.node },
   },
   // The AI wrappers and their tests may use the SDKs and call the providers.

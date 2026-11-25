@@ -74,14 +74,12 @@ pnpm lint
 pnpm typecheck
 pnpm test
 pnpm build
-pnpm scan:bundle
 ```
 
 `pnpm lint` is type-aware ESLint (typescript-eslint, React hooks). It also enforces the money and key
 rules: only the AI wrappers may import an AI SDK, and the web app may not read a key-like `VITE_`
-variable. `pnpm scan:bundle` checks the built web bundle for keys. CI runs all five on every PR and
-push to main. New logic gets tests next
-to its source (`foo.ts` → `foo.test.ts`, Vitest).
+variable. CI runs all four on every PR and push to main, then checks the built web bundle for keys.
+New logic gets tests next to its source (`foo.ts` → `foo.test.ts`, Vitest).
 
 ## Working with Claude Code
 

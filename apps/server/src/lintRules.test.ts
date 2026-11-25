@@ -2,7 +2,7 @@ import { readdir, readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ESLint } from 'eslint';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 // The lint rules that guard money and keys (eslint.config.js), checked with the real config. A test,
 // so that loosening the config by mistake (a typo in a file list, a rule turned off for everyone)
@@ -10,6 +10,14 @@ import { describe, expect, it } from 'vitest';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const eslint = new ESLint({ cwd: ROOT });
+
+// The first lint builds the TypeScript program for the whole repo: about a second here, several on
+// CI's slower machines, past Vitest's 5 s default. Do it once up front with its own long limit, so
+// no single test pays for it, and give each test some room on a slow machine.
+vi.setConfig({ testTimeout: 30_000 });
+beforeAll(async () => {
+  await eslint.lintFiles(['apps/server/src/picture.test.ts', 'apps/web/src/lib/jobs.test.ts']);
+}, 120_000);
 
 // Lints `code` as if it were the file at `file`, and returns which rules complained.
 async function rulesHit(file: string, code: string): Promise<string[]> {
@@ -148,7 +156,7 @@ describe('the rules can not be switched off from inside a file', () => {
 
   async function sourceFiles(): Promise<string[]> {
     const out: string[] = [];
-    for (const dir of ['apps/server/src', 'apps/web/src', 'apps/web/scripts']) {
+    for (const dir of ['apps/server/src', 'apps/web/src']) {
       for (const entry of await readdir(`${ROOT}${dir}`, { withFileTypes: true, recursive: true })) {
         if (entry.isFile() && /\.(ts|tsx|js|cjs|mjs)$/.test(entry.name)) out.push(`${entry.parentPath}/${entry.name}`);
       }

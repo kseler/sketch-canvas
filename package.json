@@ -6,7 +6,6 @@
   "scripts": {
     "dev": "concurrently -n web,server -c blue,green \"pnpm --filter @sketch/web dev\" \"pnpm --filter @sketch/server dev\"",
     "build": "pnpm --filter @sketch/web build",
-    "scan:bundle": "pnpm --filter @sketch/web scan:bundle",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint .",
     "test": "pnpm -r --if-present test"
