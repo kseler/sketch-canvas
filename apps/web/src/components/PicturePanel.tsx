@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import type * as Y from 'yjs';
 import { latestImage, type ImageRecord } from '../lib/images';
+import { DotGrid } from './DotGrid';
 
 // The room's latest generated picture, next to the canvas, so the sketch stays visible and
 // drawable. Everyone in the room sees the same picture: it comes from the shared document, not
-// from the reply to whoever clicked Generate.
+// from the reply to whoever clicked Generate. While the room's job runs (`busy`, also from the
+// shared document), everyone sees the dot-grid loading picture in its place.
 export function PicturePanel({ images, busy }: { images: Y.Array<unknown>; busy: boolean }) {
   // Pictures that failed to load (e.g. the file was removed): skipped, so an older one shows.
   const [broken, setBroken] = useState<ReadonlySet<string>>(() => new Set());
@@ -19,32 +21,25 @@ export function PicturePanel({ images, busy }: { images: Y.Array<unknown>; busy:
 
   return (
     <aside style={{ width: 320, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ position: 'relative' }}>
-        {latest ? (
-          <img
-            key={latest.id}
-            src={latest.url}
-            alt="The picture generated from the sketch"
-            onError={() => setBroken((prev) => new Set(prev).add(latest.id))}
-            style={{
-              width: '100%',
-              aspectRatio: `${latest.w} / ${latest.h}`,
-              objectFit: 'contain',
-              border: '1px solid #ccc',
-              background: '#fff',
-              opacity: busy ? 0.4 : 1,
-            }}
-          />
-        ) : (
-          <p style={{ margin: 0, color: '#666' }}>{busy ? '' : 'The picture appears here after Generate.'}</p>
-        )}
-        {busy && (
-          // Only for the tab that clicked; chunk 6 shows it to everyone in the room.
-          <p role="status" style={{ margin: 0, padding: 8, color: '#333', ...(latest ? { position: 'absolute', inset: 0, display: 'grid', placeItems: 'center' } : {}) }}>
-            Generating...
-          </p>
-        )}
-      </div>
+      {busy ? (
+        <DotGrid />
+      ) : latest ? (
+        <img
+          key={latest.id}
+          src={latest.url}
+          alt="The picture generated from the sketch"
+          onError={() => setBroken((prev) => new Set(prev).add(latest.id))}
+          style={{
+            width: '100%',
+            aspectRatio: `${latest.w} / ${latest.h}`,
+            objectFit: 'contain',
+            border: '1px solid #ccc',
+            background: '#fff',
+          }}
+        />
+      ) : (
+        <p style={{ margin: 0, color: '#666' }}>The picture appears here after Generate.</p>
+      )}
       {latest && !busy && (
         <a href={latest.url} download={`sketch-${latest.id.slice(0, 8)}.png`}>
           Download

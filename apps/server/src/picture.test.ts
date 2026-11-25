@@ -26,7 +26,7 @@ function setup() {
     order.push('save');
     return { id: ID, url: `/api/images/${ID}.png` };
   });
-  const add = vi.fn<RoomImages['add']>(() => {
+  const add = vi.fn<RoomImages['add']>(async () => {
     order.push('add');
   });
   const make = createMakePicture({
@@ -109,14 +109,12 @@ describe('createMakePicture', () => {
 
   it('reports a picture that was stored but could not be shared as a storage error', async () => {
     const s = setup();
-    s.add.mockImplementationOnce(() => {
-      throw new Error('doc gone');
-    });
+    s.add.mockRejectedValueOnce(new Error('log not writable'));
     await expect(s.make({ roomId: 'room-1', brief: BRIEF, area: AREA })).rejects.toBeInstanceOf(PictureStorageError);
   });
 
   it('uses the real clock when none is injected', async () => {
-    const add = vi.fn();
+    const add = vi.fn(async () => {});
     const make = createMakePicture({
       checkContent: async () => {},
       generateImage: async () => ({ png: PNG, width: 1, height: 1 }),

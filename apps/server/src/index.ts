@@ -14,6 +14,7 @@ import { createImageStore } from './imageStore';
 import { checkContent, openAiModerationClient } from './moderation';
 import { createMakePicture, type MakePicture } from './picture';
 import { createRoomImages } from './roomImages';
+import { createRoomJobs } from './roomJobs';
 import { attachYjsSync, isRoomOpen } from './sync';
 
 // Keys and budget settings live in .env at the repo root (see .env.example). Node reads it
@@ -62,6 +63,16 @@ for (const name of ['ANTHROPIC_LOG', 'OPENAI_LOG']) {
   console.warn(`${name}=${sdkLog}: the SDK will log request bodies, including sketches.`);
 }
 
+// Which picture belongs to which room, read back from data/room-images.jsonl, so a restart doesn't
+// empty the rooms' picture panels. Read before the server takes connections.
+const roomImages = createRoomImages({
+  getDoc: getYDoc,
+  logPath: fileURLToPath(new URL('../data/room-images.jsonl', import.meta.url)),
+});
+const pictures = await roomImages.load();
+console.log(`pictures: ${pictures.loaded} known` + (pictures.skipped > 0 ? `; skipped ${pictures.skipped} unreadable log line(s)` : ''));
+const jobs = createRoomJobs({ getDoc: getYDoc });
+
 // The image step needs the OpenAI key (IMAGE_API_KEY, Images + Moderations). Without it, Generate
 // stops after the brief. The API host is pinned like Anthropic's; SDK retries are off per call.
 const images = createImageStore(fileURLToPath(new URL('../data/images', import.meta.url)));
@@ -76,15 +87,18 @@ if (imageKey) {
     checkContent: (text) => checkContent(moderation, text),
     generateImage: createGenerateImage({ client: openAiImageClient(openai), costs }),
     store: images,
-    rooms: createRoomImages(getYDoc),
+    rooms: roomImages,
   });
 } else {
   console.warn('IMAGE_API_KEY is not set: Generate stops after the brief.');
 }
 
-const app = createApp({ allowedOrigins: readAllowedOrigins(process.env), describeSketch, makePicture, images, isRoomOpen });
+const app = createApp({ allowedOrigins: readAllowedOrigins(process.env), jobs, describeSketch, makePicture, images, isRoomOpen });
 const server = serve({ fetch: app.fetch, port: PORT }) as Server;
 
-attachYjsSync(server);
+attachYjsSync(server, (roomId) => {
+  roomImages.open(roomId);
+  jobs.open(roomId);
+});
 
 console.log(`server listening on http://localhost:${PORT}`);

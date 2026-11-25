@@ -1,15 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createApp } from './app';
+import { createApp, type AppOptions } from './app';
 import { createRoomLocks, type RoomLocks } from './roomLocks';
 import { MAX_SKETCH_BYTES, MAX_SKETCH_SIDE } from './generate';
 import type { BriefOutcome, DescribeSketch } from './describeSketch';
 import { BudgetExceededError } from './budget';
 import { NotBilledError, PaidCallTimeoutError } from './cost';
-import { NotConfiguredError } from './generate';
 import { ImageBlockedError, InvalidImageError } from './generateImage';
 import { ContentFlaggedError, ModerationUnavailableError } from './moderation';
 import { PictureStorageError, type MakePicture } from './picture';
 import type { ImageRecord } from './roomImages';
+import type { JobOutcome, RoomJobs } from './roomJobs';
 import { createImageStore, type ImageStore } from './imageStore';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -22,8 +22,28 @@ const fakeDescribe: DescribeSketch = async (request) => {
   return { ok: true, brief: FAKE_BRIEF };
 };
 
+// Records jobs instead of writing them into a room's Yjs document, so a test can see how a job
+// ended. The work runs after the 202 answer, so tests wait for `finished` rather than the reply.
+function fakeJobs() {
+  const started: string[] = [];
+  const finished: Array<{ roomId: string; jobId: string; outcome: JobOutcome }> = [];
+  const jobs: RoomJobs = {
+    open: () => {},
+    start: (roomId) => {
+      started.push(roomId);
+      return `job-${started.length}`;
+    },
+    finish: (roomId, jobId, outcome) => {
+      finished.push({ roomId, jobId, outcome });
+    },
+  };
+  const settled = (count = 1) => vi.waitFor(() => expect(finished.length).toBeGreaterThanOrEqual(count));
+  return { jobs, started, finished, settled };
+}
 
-const app = createApp({ describeSketch: fakeDescribe });
+const testApp = (options: Partial<AppOptions> = {}) => createApp({ jobs: fakeJobs().jobs, ...options });
+
+const app = testApp({ describeSketch: fakeDescribe });
 
 const SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const be32 = (n: number) => [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
@@ -52,17 +72,24 @@ describe('GET /api/health', () => {
 });
 
 describe('POST /api/generate', () => {
-  it('returns the brief for a valid sketch, passing the room, the image and its real size along', async () => {
+  it('answers 202 with the job id for a valid sketch, then describes it with the room, the image and its real size', async () => {
     describeCalls.length = 0;
-    const res = await postJson(validBody);
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ brief: FAKE_BRIEF });
+    const j = fakeJobs();
+    const res = await testApp({ describeSketch: fakeDescribe, jobs: j.jobs }).request('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(validBody),
+    });
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ jobId: 'job-1' });
+    expect(j.started).toEqual(['room-1']);
+    await j.settled();
     expect(describeCalls).toEqual([{ roomId: 'room-1', image: { base64: validBody.image, width: 800, height: 600 } }]);
   });
 
   it('accepts a sketch at exactly the side limit', async () => {
     const res = await postJson({ ...validBody, image: pngBase64(MAX_SKETCH_SIDE, MAX_SKETCH_SIDE) });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(202);
   });
 
   it('rejects a sketch one pixel wider than the limit with 413', async () => {
@@ -84,7 +111,7 @@ describe('POST /api/generate', () => {
   it('accepts a PNG of exactly MAX_SKETCH_BYTES and rejects one byte more with 413', async () => {
     const header = pngBytes(10, 10).length;
     const atLimit = await postJson({ ...validBody, image: pngBase64(10, 10, MAX_SKETCH_BYTES - header) });
-    expect(atLimit.status).toBe(200);
+    expect(atLimit.status).toBe(202);
     const over = await postJson({ ...validBody, image: pngBase64(10, 10, MAX_SKETCH_BYTES - header + 1) });
     expect(over.status).toBe(413);
   });
@@ -153,7 +180,7 @@ describe('POST /api/generate', () => {
   });
 
   it('accepts a 64-character roomId', async () => {
-    expect((await postJson({ ...validBody, roomId: 'a'.repeat(64) })).status).toBe(200);
+    expect((await postJson({ ...validBody, roomId: 'a'.repeat(64) })).status).toBe(202);
   });
 
   it.each([
@@ -190,7 +217,7 @@ describe('POST /api/generate', () => {
 });
 
 describe('POST /api/generate room lock', () => {
-  const lockedApp = (locks: RoomLocks) => createApp({ describeSketch: fakeDescribe, locks });
+  const lockedApp = (locks: RoomLocks) => testApp({ describeSketch: fakeDescribe, locks });
   const send = (a: ReturnType<typeof createApp>, body: unknown) =>
     a.request('/api/generate', {
       method: 'POST',
@@ -208,10 +235,10 @@ describe('POST /api/generate room lock', () => {
     expect(typeof (await busy.json()).error).toBe('string');
 
     const other = await send(a, { ...validBody, roomId: 'room-2' });
-    expect(other.status).toBe(200);
+    expect(other.status).toBe(202);
 
     release?.();
-    expect((await send(a, validBody)).status).toBe(200);
+    expect((await send(a, validBody)).status).toBe(202);
   });
 
   it('does not free a lock held by someone else when it is refused', async () => {
@@ -221,11 +248,11 @@ describe('POST /api/generate room lock', () => {
     expect(locks.isBusy('room-1')).toBe(true);
   });
 
-  it('frees the room once the request has finished', async () => {
+  it('frees the room once the job has ended', async () => {
     const locks = createRoomLocks();
     const res = await send(lockedApp(locks), validBody);
-    expect(res.status).toBe(200);
-    expect(locks.isBusy('room-1')).toBe(false);
+    expect(res.status).toBe(202);
+    await vi.waitFor(() => expect(locks.isBusy('room-1')).toBe(false));
   });
 
   it.each([
@@ -249,12 +276,12 @@ describe('CORS on /api', () => {
     });
 
   it('allows the default local web origin', async () => {
-    const res = await preflight(createApp({ describeSketch: fakeDescribe }), 'http://localhost:5173');
+    const res = await preflight(testApp({ describeSketch: fakeDescribe }), 'http://localhost:5173');
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('http://localhost:5173');
   });
 
   it('does not allow an unknown origin', async () => {
-    const res = await preflight(createApp({ describeSketch: fakeDescribe }), 'https://evil.example');
+    const res = await preflight(testApp({ describeSketch: fakeDescribe }), 'https://evil.example');
     expect(res.headers.get('Access-Control-Allow-Origin')).not.toBe('https://evil.example');
     expect(res.headers.get('Access-Control-Allow-Origin')).not.toBe('*');
   });
@@ -266,7 +293,7 @@ describe('CORS on /api', () => {
   });
 
   it('uses the configured origins instead of the defaults', async () => {
-    const a = createApp({ describeSketch: fakeDescribe, allowedOrigins: ['https://sketch.example.com'] });
+    const a = testApp({ describeSketch: fakeDescribe, allowedOrigins: ['https://sketch.example.com'] });
     const ok = await preflight(a, 'https://sketch.example.com');
     expect(ok.headers.get('Access-Control-Allow-Origin')).toBe('https://sketch.example.com');
     const refused = await preflight(a, 'http://localhost:5173');
@@ -275,7 +302,7 @@ describe('CORS on /api', () => {
 
   it('still serves a request without an Origin header (curl, scripts)', async () => {
     const res = await post(JSON.stringify(validBody));
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(202);
   });
 });
 
@@ -285,7 +312,7 @@ describe('POST guard against other sites', () => {
   it('refuses a simple text/plain POST, which a browser sends cross-site without a preflight', async () => {
     const locks = createRoomLocks();
     const acquire = vi.spyOn(locks, 'tryAcquire');
-    const res = await createApp({ describeSketch: fakeDescribe, locks }).request('/api/generate', {
+    const res = await testApp({ describeSketch: fakeDescribe, locks }).request('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
       body: validJson,
@@ -308,13 +335,13 @@ describe('POST guard against other sites', () => {
 
   it('accepts application/json with a charset', async () => {
     const res = await post(validJson, { 'Content-Type': 'application/json; charset=utf-8' });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(202);
   });
 
   it('refuses a POST from a page on another site with 403, before taking the lock', async () => {
     const locks = createRoomLocks();
     const acquire = vi.spyOn(locks, 'tryAcquire');
-    const res = await createApp({ describeSketch: fakeDescribe, locks }).request('/api/generate', {
+    const res = await testApp({ describeSketch: fakeDescribe, locks }).request('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example' },
       body: validJson,
@@ -325,13 +352,13 @@ describe('POST guard against other sites', () => {
 
   it('accepts a POST from the allowed web page', async () => {
     const res = await post(validJson, { 'Content-Type': 'application/json', Origin: 'http://localhost:5173' });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(202);
   });
 });
 
 describe('guard is deny-by-default for methods', () => {
   it('also covers a write route added later, e.g. a cross-site text/plain PUT', async () => {
-    const a = createApp({ describeSketch: fakeDescribe });
+    const a = testApp({ describeSketch: fakeDescribe });
     a.put('/api/later', (c) => c.json({ ok: true })); // stands in for a future route
     const fromEvil = await a.request('/api/later', {
       method: 'PUT',
@@ -354,166 +381,303 @@ describe('guard is deny-by-default for methods', () => {
   });
 });
 
-describe('POST /api/generate brief outcomes and errors', () => {
+describe('POST /api/generate job outcomes', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  const send = (a: ReturnType<typeof createApp>) =>
-    a.request('/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(validBody),
-    });
+  const ID = '3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b';
+  const RECORD: ImageRecord = { kind: 'image', id: ID, url: `/api/images/${ID}.png`, x: 0, y: 0, w: 800, h: 600, createdAt: '2026-11-24T12:00:00.000Z' };
   const describing = (outcome: BriefOutcome): DescribeSketch => async () => outcome;
   const failing = (error: unknown): DescribeSketch => () => Promise.reject(error);
-  const errorText = async (res: Response) => ((await res.json()) as { error: string }).error;
+  const pictureFailing = (error: unknown): MakePicture => () => Promise.reject(error);
+  const send = (a: ReturnType<typeof createApp>, body: unknown = validBody) =>
+    a.request('/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
-  it('answers 200 with only the brief, no status field', async () => {
-    const res = await send(createApp({ describeSketch: describing({ ok: true, brief: FAKE_BRIEF }) }));
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ brief: FAKE_BRIEF });
+  // Sends one valid request and waits for its job to end; returns how it ended.
+  async function run(options: Partial<AppOptions>): Promise<JobOutcome> {
+    const j = fakeJobs();
+    const res = await send(testApp({ ...options, jobs: j.jobs }));
+    expect(res.status).toBe(202);
+    await j.settled();
+    expect(j.finished).toHaveLength(1);
+    expect(j.finished[0]).toMatchObject({ roomId: 'room-1', jobId: 'job-1' });
+    return j.finished[0]!.outcome;
+  }
+  const errorOf = async (options: Partial<AppOptions>) => {
+    const outcome = await run(options);
+    expect(outcome.status).toBe('failed');
+    return (outcome as { error: string }).error;
+  };
+
+  it('answers 503 up front, with no job, when the server has no brief step', async () => {
+    const j = fakeJobs();
+    const res = await send(testApp({ jobs: j.jobs }));
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'Generate is not set up on this server.' });
+    expect(j.started).toEqual([]);
   });
 
-  it.each([
-    ['refused', 422],
-    ['truncated', 502],
-    ['invalid', 502],
-  ] as const)('maps the outcome %s to %i with a fixed message', async (reason, status) => {
-    const res = await send(createApp({ describeSketch: describing({ ok: false, reason }) }));
-    expect(res.status).toBe(status);
-    expect(typeof (await errorText(res))).toBe('string');
+  it('ends done with the brief and no picture when no picture step is configured', async () => {
+    expect(await run({ describeSketch: describing({ ok: true, brief: FAKE_BRIEF }) })).toEqual({ status: 'done', brief: FAKE_BRIEF, picture: false });
+  });
+
+  it('ends done with the brief and a picture when the picture step succeeds', async () => {
+    expect(await run({ describeSketch: fakeDescribe, makePicture: async () => RECORD })).toEqual({ status: 'done', brief: FAKE_BRIEF, picture: true });
+  });
+
+  it('gives the picture step the room, the brief and the area the sketch covers', async () => {
+    const makePicture = vi.fn<MakePicture>(async () => RECORD);
+    const j = fakeJobs();
+    await send(testApp({ describeSketch: fakeDescribe, makePicture, jobs: j.jobs }), { roomId: 'room-7', image: pngBase64(640, 480) });
+    await j.settled();
+    expect(makePicture).toHaveBeenCalledTimes(1);
+    expect(makePicture).toHaveBeenCalledWith({ roomId: 'room-7', brief: FAKE_BRIEF, area: { x: 0, y: 0, w: 640, h: 480 } });
+  });
+
+  it('does not make a picture when the brief failed', async () => {
+    const makePicture = vi.fn<MakePicture>(async () => RECORD);
+    await run({ describeSketch: describing({ ok: false, reason: 'refused' }), makePicture });
+    expect(makePicture).not.toHaveBeenCalled();
+  });
+
+  it.each(['refused', 'truncated', 'invalid'] as const)('fails the job with a fixed message when the brief is %s', async (reason) => {
+    expect(await errorOf({ describeSketch: describing({ ok: false, reason }) })).toMatch(/AI/);
   });
 
   it('gives the same wording for truncated and invalid, so a player learns nothing about which', async () => {
-    const a = await send(createApp({ describeSketch: describing({ ok: false, reason: 'truncated' }) }));
-    const b = await send(createApp({ describeSketch: describing({ ok: false, reason: 'invalid' }) }));
-    expect(await errorText(a)).toBe(await errorText(b));
+    const a = await errorOf({ describeSketch: describing({ ok: false, reason: 'truncated' }) });
+    const b = await errorOf({ describeSketch: describing({ ok: false, reason: 'invalid' }) });
+    expect(a).toBe(b);
   });
 
-  it('answers 429 with room wording for a room budget, and different wording for the global one', async () => {
+  it('uses room wording for a room budget, and different wording for the global one', async () => {
+    const room = await errorOf({ describeSketch: failing(new BudgetExceededError('room')) });
+    const global = await errorOf({ describeSketch: failing(new BudgetExceededError('global')) });
+    expect(room).toMatch(/room/i);
+    expect(global).not.toMatch(/room/i);
+    expect(room).not.toBe(global);
+  });
+
+  it.each([
+    ['a brief timeout', { describeSketch: failing(new PaidCallTimeoutError(30_000)) }, 'The AI took too long. Try again.'],
+    ['a rate-limited provider (429)', { describeSketch: failing(new NotBilledError(429)) }, 'The AI service is busy. Try again in a minute.'],
+    ['an overloaded provider (529)', { describeSketch: failing(new NotBilledError(529)) }, 'The AI service is busy. Try again in a minute.'],
+    ['a rejected, not-billed call', { describeSketch: failing(new NotBilledError(400)) }, 'Could not reach the AI service. Try again later.'],
+    ['an unknown error', { describeSketch: failing(new TypeError('boom')) }, 'Could not reach the AI service. Try again later.'],
+    ['moderation down (fails closed)', { describeSketch: fakeDescribe, makePicture: pictureFailing(new ModerationUnavailableError()) }, "Couldn't check the picture request. Try again in a minute."],
+    ['a broken image', { describeSketch: fakeDescribe, makePicture: pictureFailing(new InvalidImageError()) }, 'The picture came back broken. Try again.'],
+    ['a picture that could not be saved', { describeSketch: fakeDescribe, makePicture: pictureFailing(new PictureStorageError({ cause: new Error('ENOSPC') })) }, 'The picture was made but could not be saved. Try again.'],
+    ['an image timeout', { describeSketch: fakeDescribe, makePicture: pictureFailing(new PaidCallTimeoutError(1000)) }, 'The AI took too long. Try again.'],
+  ] satisfies Array<[string, Partial<AppOptions>, string]>)('fails the job with the fixed message for %s', async (_label, options, message) => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    const room = await send(createApp({ describeSketch: failing(new BudgetExceededError('room')) }));
-    const global = await send(createApp({ describeSketch: failing(new BudgetExceededError('global')) }));
-    expect(room.status).toBe(429);
-    expect(global.status).toBe(429);
-    const roomText = await errorText(room);
-    const globalText = await errorText(global);
-    expect(roomText).toMatch(/room/i);
-    expect(globalText).not.toMatch(/room/i);
-    expect(roomText).not.toBe(globalText);
+    expect(await errorOf(options)).toBe(message);
   });
 
-  it('answers 504 for a timeout', async () => {
-    const res = await send(createApp({ describeSketch: failing(new PaidCallTimeoutError(30_000)) }));
-    expect(res.status).toBe(504);
+  it('uses the same text for our moderation flag and the image service block, logging the name only', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const flagged = await errorOf({ describeSketch: fakeDescribe, makePicture: pictureFailing(new ContentFlaggedError()) });
+    const blocked = await errorOf({ describeSketch: fakeDescribe, makePicture: pictureFailing(new ImageBlockedError()) });
+    expect(flagged).toBe(blocked);
+    expect(warn.mock.calls).toEqual([['generate: picture refused (ContentFlaggedError)'], ['generate: picture refused (ImageBlockedError)']]);
   });
 
-  it('answers 503 when Generate is not configured, including the default app with no describeSketch', async () => {
-    const explicit = await send(createApp({ describeSketch: failing(new NotConfiguredError()) }));
-    expect(explicit.status).toBe(503);
-    const byDefault = await send(createApp());
-    expect(byDefault.status).toBe(503);
-  });
-
-  it('answers 502 for a rejected, not-billed call and for an unknown error, logging only the name', async () => {
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const notBilled = await send(createApp({ describeSketch: failing(new NotBilledError(400)) }));
-    expect(notBilled.status).toBe(502);
-    const unknown = await send(createApp({ describeSketch: failing(new TypeError('boom')) }));
-    expect(unknown.status).toBe(502);
-    expect(error).toHaveBeenCalledTimes(2);
-  });
-
-  it('does not leak the error message to the player or the log', async () => {
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const secret = new Error('SECRET-sk-ant-xyz');
-    const res = await send(createApp({ describeSketch: failing(secret) }));
-    expect(res.status).toBe(502);
-    expect(await res.text()).not.toContain('SECRET');
-    expect(error).toHaveBeenCalledTimes(1);
-    for (const args of error.mock.calls) {
+  it('never puts model or provider text in the job or the log, whatever the outcome', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const marker = 'SECRET-sk-ant-xyz';
+    const cases: Array<Partial<AppOptions>> = [
+      { describeSketch: describing({ ok: false, reason: 'refused', message: marker } as unknown as BriefOutcome) }, // cast: extra field a careless route might echo
+      { describeSketch: describing({ ok: false, reason: 'invalid', detail: marker } as unknown as BriefOutcome) },
+      { describeSketch: failing(new Error(marker)) },
+      { describeSketch: failing(marker) }, // a non-Error
+      { describeSketch: fakeDescribe, makePicture: pictureFailing(new ImageBlockedError({ cause: new Error(marker) })) },
+      { describeSketch: fakeDescribe, makePicture: pictureFailing(new ModerationUnavailableError({ cause: new Error(marker) })) },
+      { describeSketch: fakeDescribe, makePicture: pictureFailing(new Error(marker)) },
+    ];
+    for (const options of cases) {
+      expect(JSON.stringify(await run(options))).not.toContain('SECRET');
+    }
+    for (const args of log.mock.calls) {
       expect(args).toHaveLength(1); // no error object passed along, which would print message and stack
       expect(typeof args[0]).toBe('string');
-      expect(args[0]).not.toContain('SECRET');
-      expect(args[0]).not.toContain('sk-ant');
     }
+    expect(JSON.stringify(log.mock.calls)).not.toContain('SECRET');
   });
 
-  it('does not log or leak when a non-Error is thrown', async () => {
+  it('logs the provider status and code, e.g. 429 insufficient_quota (no credit) vs a real rate limit', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const res = await send(createApp({ describeSketch: failing('SECRET-sk-ant-xyz') }));
-    expect(res.status).toBe(502);
-    expect(await res.text()).not.toContain('SECRET');
-    expect(JSON.stringify(error.mock.calls)).not.toContain('SECRET');
+    await run({ describeSketch: fakeDescribe, makePicture: pictureFailing(new NotBilledError(429, { code: 'insufficient_quota' })) });
+    expect(error.mock.calls).toEqual([['generate: failed (NotBilledError 429 insufficient_quota)']]);
   });
 
-  it('never puts model or provider text in a reply, whatever the outcome', async () => {
+  it('releases the room lock after every outcome and error, including a step that throws before its promise', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    const marker = 'MODEL-SAID-THIS';
-    const cases: DescribeSketch[] = [
-      describing({ ok: false, reason: 'refused', message: marker } as unknown as BriefOutcome), // cast: extra field a careless route might echo
-      describing({ ok: false, reason: 'invalid', detail: marker } as unknown as BriefOutcome),
-      failing(new Error(marker)),
-      failing(new BudgetExceededError('room')),
-      failing(new PaidCallTimeoutError(1)),
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cases: Array<Partial<AppOptions>> = [
+      { describeSketch: describing({ ok: true, brief: FAKE_BRIEF }) },
+      { describeSketch: describing({ ok: false, reason: 'refused' }) },
+      { describeSketch: failing(new BudgetExceededError('room')) },
+      { describeSketch: failing(new Error('boom')) },
+      { describeSketch: () => { throw new Error('thrown before a promise'); } },
+      { describeSketch: fakeDescribe, makePicture: async () => RECORD },
+      { describeSketch: fakeDescribe, makePicture: pictureFailing(new ContentFlaggedError()) },
+      { describeSketch: fakeDescribe, makePicture: () => { throw new Error('thrown before a promise'); } },
     ];
-    for (const describeSketch of cases) {
-      const res = await send(createApp({ describeSketch }));
-      expect(await res.text()).not.toContain(marker);
-    }
-  });
-
-  it('releases the room lock after every outcome and error', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    const cases: DescribeSketch[] = [
-      describing({ ok: true, brief: FAKE_BRIEF }),
-      describing({ ok: false, reason: 'refused' }),
-      describing({ ok: false, reason: 'truncated' }),
-      describing({ ok: false, reason: 'invalid' }),
-      failing(new BudgetExceededError('room')),
-      failing(new PaidCallTimeoutError(1)),
-      failing(new NotConfiguredError()),
-      failing(new Error('boom')),
-      () => { throw new Error('thrown before a promise'); },
-    ];
-    for (const describeSketch of cases) {
+    for (const options of cases) {
       const locks = createRoomLocks();
-      const res = await send(createApp({ describeSketch, locks }));
-      expect(res.status).toBeGreaterThanOrEqual(200);
+      expect((await run({ ...options, locks })).status).toMatch(/^(done|failed)$/);
       expect(locks.isBusy('room-1')).toBe(false);
     }
   });
 
-  it('holds the lock while describing: a second POST gets 409, and works once the first is done', async () => {
+  it('releases the lock even when the job cannot be recorded, and logs only the error name', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const locks = createRoomLocks();
-    const finishers: Array<(outcome: BriefOutcome) => void> = [];
-    const calls: string[] = [];
-    const describeSketch: DescribeSketch = ({ roomId }) => {
-      calls.push(roomId);
-      return new Promise<BriefOutcome>((resolve) => { finishers.push(resolve); });
-    };
-    const a = createApp({ describeSketch, locks });
+    const jobs: RoomJobs = { open: () => {}, start: () => 'job-1', finish: () => { throw new Error('SECRET doc gone'); } };
+    expect((await send(testApp({ describeSketch: fakeDescribe, locks, jobs }))).status).toBe(202);
+    await vi.waitFor(() => expect(locks.isBusy('room-1')).toBe(false));
+    expect(error.mock.calls).toEqual([['generate: could not record the job (Error)']]);
+  });
 
-    const first = send(a);
+  it('records a plain failure when the real outcome cannot be written, so the room is not left "running"', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const written: JobOutcome[] = [];
+    let calls = 0;
+    const jobs: RoomJobs = {
+      open: () => {},
+      start: () => 'job-1',
+      finish: (_roomId, _jobId, outcome) => {
+        calls += 1;
+        if (calls === 1) throw new Error('first write failed');
+        written.push(outcome);
+      },
+    };
+    expect((await send(testApp({ describeSketch: fakeDescribe, jobs }))).status).toBe(202);
+    await vi.waitFor(() => expect(written).toEqual([{ status: 'failed', error: 'Could not reach the AI service. Try again later.' }]));
+  });
+
+  it('gives the lock back and answers a fixed 500 when the job cannot be started', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const locks = createRoomLocks();
+    const describe = vi.fn(fakeDescribe);
+    const jobs: RoomJobs = { open: () => {}, start: () => { throw new Error('SECRET'); }, finish: () => {} };
+    const res = await send(testApp({ describeSketch: describe, locks, jobs }));
+    expect(res.status).toBe(500);
+    expect(await res.text()).not.toContain('SECRET');
+    expect(locks.isBusy('room-1')).toBe(false);
+    expect(describe).not.toHaveBeenCalled();
+    expect(JSON.stringify(error.mock.calls)).not.toContain('SECRET');
+  });
+
+  it('holds the lock for the whole job, not just the request: a second POST gets 409 until it ends', async () => {
+    const locks = createRoomLocks();
+    const finishers = new Map<string, (record: ImageRecord) => void>();
+    const makePicture: MakePicture = ({ roomId }) => new Promise<ImageRecord>((resolve) => { finishers.set(roomId, resolve); });
+    const calls: string[] = [];
+    const describeSketch: DescribeSketch = async ({ roomId }) => {
+      calls.push(roomId);
+      return { ok: true, brief: FAKE_BRIEF };
+    };
+    const j = fakeJobs();
+    const a = testApp({ describeSketch, makePicture, locks, jobs: j.jobs });
+
+    expect((await send(a)).status).toBe(202); // answered while the picture is still being made
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(locks.isBusy('room-1')).toBe(true);
 
     const second = await send(a);
     expect(second.status).toBe(409);
-    expect(calls).toHaveLength(1); // the second request never reached the paid step
+    expect(await second.json()).toEqual({ error: 'A picture is already being generated in this room.' });
+    expect(j.started).toEqual(['room-1']); // no second job
+    expect(calls).toHaveLength(1); // and no second paid step
 
-    const otherRoom = a.request('/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...validBody, roomId: 'room-2' }),
-    });
-    await vi.waitFor(() => expect(calls).toHaveLength(2));
-    finishers[1]?.({ ok: true, brief: FAKE_BRIEF });
-    expect((await otherRoom).status).toBe(200);
-    expect(locks.isBusy('room-1')).toBe(true); // the other room finishing frees only its own lock
+    expect((await send(a, { ...validBody, roomId: 'room-2' })).status).toBe(202); // other rooms still work
+    expect(j.started).toEqual(['room-1', 'room-2']);
 
-    finishers[0]?.({ ok: true, brief: FAKE_BRIEF });
-    expect((await first).status).toBe(200);
+    await vi.waitFor(() => expect(finishers.has('room-2')).toBe(true));
+    finishers.get('room-2')?.(RECORD);
+    await vi.waitFor(() => expect(locks.isBusy('room-2')).toBe(false));
+    expect(locks.isBusy('room-1')).toBe(true); // the other room ending frees only its own lock
+
+    finishers.get('room-1')?.(RECORD);
+    await vi.waitFor(() => expect(j.finished.map((f) => f.roomId)).toContain('room-1'));
     expect(locks.isBusy('room-1')).toBe(false);
+  });
+
+  it('still records the job and frees the room when the thrown value is hostile (a throwing name getter)', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const hostile = new Error('x');
+    Object.defineProperty(hostile, 'name', { get: () => { throw new Error('gotcha'); } });
+    const locks = createRoomLocks();
+    expect(await run({ describeSketch: failing(hostile), locks })).toEqual({ status: 'failed', error: 'Could not reach the AI service. Try again later.' });
+    expect(locks.isBusy('room-1')).toBe(false);
+    expect(JSON.stringify(error.mock.calls)).not.toContain('gotcha');
+  });
+
+  it('ends a job that runs past the deadline (e.g. a hung disk while saving), frees the room, and records it once', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const locks = createRoomLocks();
+    let finish: (record: ImageRecord) => void = () => {};
+    const makePicture: MakePicture = () => new Promise<ImageRecord>((resolve) => { finish = resolve; });
+    const j = fakeJobs();
+    const a = testApp({ describeSketch: fakeDescribe, makePicture, locks, jobs: j.jobs, jobLimits: { jobTimeoutMs: 30, maxRunningJobs: 8 } });
+    expect((await send(a)).status).toBe(202);
+    await j.settled();
+    expect(j.finished[0]?.outcome).toEqual({ status: 'failed', error: 'The AI took too long. Try again.' });
+    expect(locks.isBusy('room-1')).toBe(false);
+    expect(error.mock.calls).toEqual([['generate: failed (JobTimeoutError)']]);
+
+    finish(RECORD); // the work finishing late does not rewrite the job
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(j.finished).toHaveLength(1);
+  });
+
+  it('refuses with 503 once the server runs as many jobs as it allows, before taking a lock or starting a job', async () => {
+    const finishers: Array<(outcome: BriefOutcome) => void> = [];
+    const describeSketch: DescribeSketch = () => new Promise<BriefOutcome>((resolve) => { finishers.push(resolve); });
+    const locks = createRoomLocks();
+    const acquire = vi.spyOn(locks, 'tryAcquire');
+    const j = fakeJobs();
+    const a = testApp({ describeSketch, locks, jobs: j.jobs, jobLimits: { jobTimeoutMs: 60_000, maxRunningJobs: 2 } });
+
+    expect((await send(a, { ...validBody, roomId: 'room-1' })).status).toBe(202);
+    expect((await send(a, { ...validBody, roomId: 'room-2' })).status).toBe(202);
+    const third = await send(a, { ...validBody, roomId: 'room-3' });
+    expect(third.status).toBe(503);
+    expect(await third.json()).toEqual({ error: 'The server is busy. Try again in a minute.' });
+    expect(j.started).toEqual(['room-1', 'room-2']);
+    expect(acquire).toHaveBeenCalledTimes(2);
+
+    await vi.waitFor(() => expect(finishers).toHaveLength(2));
+    finishers[0]?.({ ok: true, brief: FAKE_BRIEF });
+    await vi.waitFor(() => expect(j.finished).toHaveLength(1));
+    expect((await send(a, { ...validBody, roomId: 'room-3' })).status).toBe(202); // a place is free again
+    finishers.slice(1).forEach((f) => f({ ok: true, brief: FAKE_BRIEF }));
+  });
+
+  it('gives a job’s place back when its record cannot be written', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const locks = createRoomLocks();
+    const jobs: RoomJobs = { open: () => {}, start: (roomId) => roomId, finish: () => { throw new Error('doc gone'); } };
+    const a = testApp({ describeSketch: fakeDescribe, locks, jobs, jobLimits: { jobTimeoutMs: 60_000, maxRunningJobs: 1 } });
+    expect((await send(a)).status).toBe(202);
+    await vi.waitFor(() => expect(locks.isBusy('room-1')).toBe(false));
+    expect((await send(a, { ...validBody, roomId: 'room-2' })).status).toBe(202);
+  });
+
+  it('refuses a room nobody has open with 409, before any job or paid step', async () => {
+    const describe = vi.fn(fakeDescribe);
+    const j = fakeJobs();
+    const res = await send(testApp({ describeSketch: describe, isRoomOpen: () => false, jobs: j.jobs }));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'Open the room before generating.' });
+    expect(j.started).toEqual([]);
+    expect(describe).not.toHaveBeenCalled();
+  });
+
+  it('asks about the room from the request', async () => {
+    const isRoomOpen = vi.fn(() => true);
+    await send(testApp({ describeSketch: fakeDescribe, isRoomOpen }));
+    expect(isRoomOpen).toHaveBeenCalledWith('room-1');
   });
 });
 
@@ -522,137 +686,12 @@ describe('unhandled errors', () => {
 
   it('answers a fixed 500 and logs only the error name', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const a = createApp({ describeSketch: fakeDescribe });
+    const a = testApp({ describeSketch: fakeDescribe });
     a.get('/api/boom', () => { throw new Error('SECRET-sk-ant-xyz'); });
     const res = await a.request('/api/boom');
     expect(res.status).toBe(500);
     expect(await res.text()).not.toContain('SECRET');
     expect(JSON.stringify(error.mock.calls)).not.toContain('SECRET');
-  });
-});
-
-describe('provider busy', () => {
-  it.each([429, 529])('answers 503 "busy" when the provider is rate limited or overloaded (%s)', async (status) => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    const res = await createApp({ describeSketch: () => Promise.reject(new NotBilledError(status)) }).request('/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(validBody),
-    });
-    expect(res.status).toBe(503);
-    expect(await res.json()).toEqual({ error: 'The AI service is busy. Try again in a minute.' });
-    vi.restoreAllMocks();
-  });
-});
-
-describe('POST /api/generate picture step', () => {
-  afterEach(() => vi.restoreAllMocks());
-
-  const ID = '3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b';
-  const RECORD: ImageRecord = { kind: 'image', id: ID, url: `/api/images/${ID}.png`, x: 0, y: 0, w: 800, h: 600, createdAt: '2026-11-24T12:00:00.000Z' };
-  const send = (a: ReturnType<typeof createApp>, body: unknown = validBody) =>
-    a.request('/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  const withPicture = (makePicture: MakePicture, locks?: RoomLocks) => createApp({ describeSketch: fakeDescribe, makePicture, ...(locks ? { locks } : {}) });
-  const failing = (error: unknown): MakePicture => () => Promise.reject(error);
-  const errorText = async (res: Response) => ((await res.json()) as { error: string }).error;
-
-  it('answers 200 with the brief and the image record when a picture step is configured', async () => {
-    const res = await send(withPicture(async () => RECORD));
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ brief: FAKE_BRIEF, image: RECORD });
-  });
-
-  it('answers with only the brief, no image key, when no picture step is configured', async () => {
-    const res = await send(createApp({ describeSketch: fakeDescribe }));
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ brief: FAKE_BRIEF });
-  });
-
-  it('gives the picture step the room, the brief and the area the sketch covers', async () => {
-    const makePicture = vi.fn<MakePicture>(async () => RECORD);
-    await send(withPicture(makePicture), { roomId: 'room-7', image: pngBase64(640, 480) });
-    expect(makePicture).toHaveBeenCalledTimes(1);
-    expect(makePicture).toHaveBeenCalledWith({ roomId: 'room-7', brief: FAKE_BRIEF, area: { x: 0, y: 0, w: 640, h: 480 } });
-  });
-
-  it('does not make a picture when the brief failed', async () => {
-    const makePicture = vi.fn<MakePicture>(async () => RECORD);
-    const a = createApp({ describeSketch: async () => ({ ok: false, reason: 'refused' }), makePicture });
-    expect((await send(a)).status).toBe(422);
-    expect(makePicture).not.toHaveBeenCalled();
-  });
-
-  it('answers 422 with the same text for our moderation flag and the image service block', async () => {
-    const flagged = await send(withPicture(failing(new ContentFlaggedError())));
-    const blocked = await send(withPicture(failing(new ImageBlockedError())));
-    expect(flagged.status).toBe(422);
-    expect(blocked.status).toBe(422);
-    expect(await errorText(flagged)).toBe(await errorText(blocked));
-  });
-
-  it.each([
-    ['ModerationUnavailableError', new ModerationUnavailableError(), 503],
-    ['InvalidImageError', new InvalidImageError(), 502],
-    ['PaidCallTimeoutError', new PaidCallTimeoutError(1000), 504],
-    ['a room BudgetExceededError', new BudgetExceededError('room'), 429],
-    ['a global BudgetExceededError', new BudgetExceededError('global'), 429],
-    ['an unknown error', new Error('boom'), 502],
-  ])('maps %s from the picture step to %i', async (_label, error, status) => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    const res = await send(withPicture(failing(error)));
-    expect(res.status).toBe(status);
-    expect(typeof (await errorText(res))).toBe('string');
-  });
-
-  it.each([
-    ['a flag', new ContentFlaggedError()],
-    ['an image block', new ImageBlockedError()],
-    ['moderation down', new ModerationUnavailableError()],
-    ['a broken image', new InvalidImageError()],
-    ['a timeout', new PaidCallTimeoutError(1000)],
-    ['a budget refusal', new BudgetExceededError('room')],
-    ['an unknown error', new Error('boom')],
-  ])('releases the room lock after %s', async (_label, error) => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    const locks = createRoomLocks();
-    await send(withPicture(failing(error), locks));
-    expect(locks.isBusy('room-1')).toBe(false);
-  });
-
-  it('holds the room lock while the picture is being made', async () => {
-    const locks = createRoomLocks();
-    let finish: (record: ImageRecord) => void = () => {};
-    const makePicture: MakePicture = () => new Promise<ImageRecord>((resolve) => { finish = resolve; });
-    const pending = send(withPicture(makePicture, locks));
-    await vi.waitFor(() => expect(locks.isBusy('room-1')).toBe(true));
-    expect((await send(withPicture(makePicture, locks))).status).toBe(409);
-    finish(RECORD);
-    expect((await pending).status).toBe(200);
-    expect(locks.isBusy('room-1')).toBe(false);
-  });
-
-  it('never puts error messages or causes in the reply or the log', async () => {
-    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const secret = 'SECRET-sk-proj-xyz';
-    const errors = [
-      new ContentFlaggedError(),
-      new ImageBlockedError({ cause: new Error(secret) }),
-      new ModerationUnavailableError({ cause: new Error(secret) }),
-      new InvalidImageError(),
-      new Error(secret),
-    ];
-    for (const error of errors) {
-      const res = await send(withPicture(failing(error)));
-      expect(await res.text()).not.toContain('SECRET');
-    }
-    expect(JSON.stringify(log.mock.calls)).not.toContain('SECRET');
-  });
-
-  it('logs only the error name for a failed picture', async () => {
-    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await send(withPicture(failing(new ModerationUnavailableError({ cause: new Error('SECRET') }))));
-    expect(log).toHaveBeenCalledTimes(1);
-    expect(String(log.mock.calls[0]![0])).toContain('ModerationUnavailableError');
   });
 });
 
@@ -665,7 +704,7 @@ describe('GET /api/images/:file', () => {
   });
 
   it('serves a stored picture as an immutable, non-sniffable PNG', async () => {
-    const res = await createApp({ images: store() }).request(`/api/images/${ID}.png`);
+    const res = await testApp({ images: store() }).request(`/api/images/${ID}.png`);
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Type')).toBe('image/png');
     expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff');
@@ -676,12 +715,12 @@ describe('GET /api/images/:file', () => {
 
   it('asks the store for exactly the name in the URL', async () => {
     const images = store();
-    await createApp({ images }).request(`/api/images/${ID}.png`);
+    await testApp({ images }).request(`/api/images/${ID}.png`);
     expect(images.read).toHaveBeenCalledWith(`${ID}.png`);
   });
 
   it('answers 404 for a name the store does not have', async () => {
-    const res = await createApp({ images: store() }).request('/api/images/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.png');
+    const res = await testApp({ images: store() }).request('/api/images/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.png');
     expect(res.status).toBe(404);
     expect(await res.json()).toHaveProperty('error');
   });
@@ -692,7 +731,7 @@ describe('GET /api/images/:file', () => {
       await writeFile(path.join(parent, 'x.png'), 'secret');
       await mkdir(path.join(parent, 'images'));
       await writeFile(path.join(parent, 'images', 'x.png'), 'secret');
-      const res = await createApp({ images: createImageStore(path.join(parent, 'images')) }).request(`/api/images/${name}`);
+      const res = await testApp({ images: createImageStore(path.join(parent, 'images')) }).request(`/api/images/${name}`);
       expect(res.status).toBe(404);
     } finally {
       await rm(parent, { recursive: true, force: true });
@@ -700,63 +739,13 @@ describe('GET /api/images/:file', () => {
   });
 
   it('answers 404 when no image store is configured', async () => {
-    const res = await createApp().request(`/api/images/${ID}.png`);
+    const res = await testApp().request(`/api/images/${ID}.png`);
     expect(res.status).toBe(404);
   });
 
   it('still works for a GET from another site (read-only, the guard skips GET)', async () => {
-    const res = await createApp({ images: store() }).request(`/api/images/${ID}.png`, { headers: { Origin: 'https://evil.example' } });
+    const res = await testApp({ images: store() }).request(`/api/images/${ID}.png`, { headers: { Origin: 'https://evil.example' } });
     expect(res.status).toBe(200);
     expect(res.headers.get('Access-Control-Allow-Origin')).not.toBe('https://evil.example');
-  });
-});
-
-describe('chunk 5 review fixes', () => {
-  const post = (a: ReturnType<typeof createApp>) =>
-    a.request('/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(validBody) });
-
-  it('refuses a room nobody has open with 409, before any paid step', async () => {
-    const describe = vi.fn(fakeDescribe);
-    const res = await post(createApp({ describeSketch: describe, isRoomOpen: () => false }));
-    expect(res.status).toBe(409);
-    expect(await res.json()).toEqual({ error: 'Open the room before generating.' });
-    expect(describe).not.toHaveBeenCalled();
-  });
-
-  it('asks about the room from the request', async () => {
-    const isRoomOpen = vi.fn(() => true);
-    await post(createApp({ describeSketch: fakeDescribe, isRoomOpen }));
-    expect(isRoomOpen).toHaveBeenCalledWith('room-1');
-  });
-
-  it('says plainly when a paid picture could not be saved (500)', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    const makePicture: MakePicture = () => Promise.reject(new PictureStorageError({ cause: new Error('ENOSPC') }));
-    const res = await post(createApp({ describeSketch: fakeDescribe, makePicture }));
-    expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ error: 'The picture was made but could not be saved. Try again.' });
-    vi.restoreAllMocks();
-  });
-
-  it('logs a refused picture by error name only', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const makePicture: MakePicture = () => Promise.reject(new ContentFlaggedError());
-    await post(createApp({ describeSketch: fakeDescribe, makePicture }));
-    expect(warn.mock.calls).toEqual([['generate: picture refused (ContentFlaggedError)']]);
-    vi.restoreAllMocks();
-  });
-});
-
-describe('the log line names the provider error code', () => {
-  it('logs status and code, e.g. 429 insufficient_quota (no credit) vs a real rate limit', async () => {
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const makePicture: MakePicture = () => Promise.reject(new NotBilledError(429, { code: 'insufficient_quota' }));
-    await createApp({ describeSketch: fakeDescribe, makePicture }).request('/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(validBody),
-    });
-    expect(error.mock.calls).toEqual([['generate: failed (NotBilledError 429 insufficient_quota)']]);
-    error.mockRestore();
   });
 });

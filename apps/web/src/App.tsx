@@ -5,6 +5,7 @@ import { Presence } from './components/Presence';
 import { RoomControls } from './components/RoomControls';
 import { Toolbar } from './components/Toolbar';
 import { useIdentity } from './hooks/useIdentity';
+import { useJob } from './hooks/useJob';
 import { useRoomName } from './hooks/useRoomName';
 import { exportSketch } from './lib/exportSketch';
 import { requestGenerate } from './lib/generateClient';
@@ -12,13 +13,7 @@ import { readStrokes } from './lib/strokes';
 import { COLORS, ERASER_SCALE, type Size } from './lib/tools';
 import { joinRoom, type Room } from './sync/room';
 import type { Tool } from './types';
-import type { Brief } from './lib/generateClient';
-
-// One line for the status bar. React shows it as text, never as HTML.
-function briefSummary(brief: Brief): string {
-  const words = brief.lettering ? ` · with the words "${brief.lettering}"` : '';
-  return `Brief: ${brief.subject} · ${brief.style} · ${brief.mood}${words}`;
-}
+import { isActive, jobText, rememberJob } from './lib/jobs';
 
 export function App() {
   const roomName = useRoomName();
@@ -59,6 +54,28 @@ export function App() {
   const [sending, setSending] = useState(false);
   const sendingRef = useRef(false);
 
+  // The room's generation, shared by everyone in the room: while it runs, Generate is off for all
+  // of them (the server's room lock is the real gate; this just says so before anyone clicks).
+  const job = useJob(room?.job);
+  const generating = isActive(job);
+  // Jobs this tab saw running (capped), and the one it started itself (kept apart, so a peer
+  // flashing fake job ids can't push it out), per room.
+  const seenJobs = useRef(new Set<string>());
+  const myJob = useRef<string | null>(null);
+  useEffect(() => {
+    seenJobs.current = new Set();
+    myJob.current = null;
+  }, [roomName]);
+  const seenOrMine = { has: (id: string) => id === myJob.current || seenJobs.current.has(id) };
+  useEffect(() => {
+    if (job && isActive(job)) rememberJob(seenJobs.current, job.id);
+  }, [job]);
+  // A new job, or the current one changing, replaces this tab's own message (e.g. "already being
+  // generated"), so the shared status shows.
+  useEffect(() => {
+    setStatus('');
+  }, [job?.id, job?.status]);
+
   // The room on screen right now. A result that arrives after a room switch belongs to the old room
   // and must not show up in the new one.
   const roomNameRef = useRef(roomName);
@@ -70,7 +87,7 @@ export function App() {
   // Export the room's sketch and send it to the server. A canvas with no ink (empty, or only eraser
   // strokes on blank paper) is not sent: once the pipeline is built, every request costs money.
   const generate = async () => {
-    if (!room || sendingRef.current) return;
+    if (!room || sendingRef.current || generating) return;
     const strokes = readStrokes(room.strokes);
     if (!strokes.some((s) => s.tool !== 'eraser')) {
       setStatus('Draw something first.');
@@ -82,10 +99,12 @@ export function App() {
     };
     sendingRef.current = true;
     setSending(true);
-    setStatus('Reading the sketch...');
+    setStatus('Sending the sketch...');
     try {
       const result = await requestGenerate(forRoom, await exportSketch(strokes));
-      show(result.ok ? `${result.picture ? 'Picture ready. ' : ''}${briefSummary(result.brief)}` : result.error);
+      if (result.ok && roomNameRef.current === forRoom) myJob.current = result.jobId;
+      // Once the job has started, the shared job status takes over the status bar.
+      show(result.ok ? '' : result.error);
     } catch (err) {
       console.error('Exporting the sketch failed:', err);
       show('Could not export the sketch.');
@@ -115,17 +134,17 @@ export function App() {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12, alignItems: 'center' }}>
         <Toolbar tool={tool} color={color} size={size} onTool={setTool} onColor={setColor} onSize={setSize} />
         <button onClick={clearCanvas}>Clear</button>
-        <button onClick={generate} disabled={sending}>
+        <button onClick={generate} disabled={sending || generating}>
           Generate
         </button>
-        <span>{status}</span>
+        <span>{status || jobText(job, seenOrMine)}</span>
       </div>
       {room ? (
         // The canvas takes the remaining space; the picture panel sits beside it (sketch stays visible).
         <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 16 }}>
           {/* key: a fresh canvas per room, so nothing half-drawn carries over. */}
           <Canvas key={room.name} strokes={room.strokes} awareness={room.awareness} tool={tool} color={color} width={width} />
-          <PicturePanel key={`${room.name}-picture`} images={room.images} busy={sending} />
+          <PicturePanel key={`${room.name}-picture`} images={room.images} busy={generating} />
         </div>
       ) : (
         <p>Connecting...</p>
