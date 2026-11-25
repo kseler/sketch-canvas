@@ -30,7 +30,7 @@ export function RoomControls({ roomName }: { roomName: string }) {
       <span style={{ color: '#555' }}>
         Room: <code>{roomName}</code>
       </span>
-      <button onClick={copyLink} aria-live="polite">
+      <button onClick={() => void copyLink()} aria-live="polite">
         {label}
       </button>
       <button onClick={goToNewRoom}>New room</button>

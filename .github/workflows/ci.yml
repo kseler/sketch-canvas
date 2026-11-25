@@ -40,6 +40,15 @@ jobs:
       # --frozen-lockfile: fail instead of silently updating pnpm-lock.yaml, so CI tests exactly
       # what is committed.
       - run: pnpm install --frozen-lockfile
+      # Type-aware lint, including the money rule: only the AI wrappers may import an AI SDK.
+      - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      # Keys stay on the server (CLAUDE.md rule 1). The built web bundle is what every visitor
+      # downloads: fail if it holds an Anthropic or OpenAI key, or the name of one of our key
+      # variables. -l prints only the file names, never the key.
+      - name: No keys in the web bundle
+        run: |
+          test -d apps/web/dist
+          ! grep -rElI 'sk-ant-|sk-(proj|svcacct|admin)-|(ANTHROPIC|IMAGE|OPENAI)_API_KEY' apps/web/dist

@@ -57,6 +57,13 @@ export function anthropicBriefClient(client: Anthropic): BriefClient {
 // and it can't redirect requests, so it is trusted like the rest of the server's environment.
 export const ANTHROPIC_API_URL = 'https://api.anthropic.com';
 
+// The brief step for a key, as the server uses it. The client is made here and never handed out:
+// what leaves this file can only make a call through paidCall (eslint.config.js checks that only
+// the AI wrappers import an SDK or its raw clients).
+export function createDescribeSketchForKey(apiKey: string, costs: CostTracker): DescribeSketch {
+  return createDescribeSketch({ client: anthropicBriefClient(new Anthropic({ apiKey, baseURL: ANTHROPIC_API_URL })), costs });
+}
+
 // Statuses the provider doesn't bill AND a player can't cause: our key or setup is wrong
 // (401, 403, 404), or the provider is rate limiting or overloaded (429, 529). These count $0.
 // Deliberately NOT here: 400, 413, 422. Those are about the request, which carries the player's

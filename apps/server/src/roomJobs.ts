@@ -43,7 +43,7 @@ export function guardJob(doc: Y.Doc): void {
     if (transaction.origin === SERVER_ORIGIN) return;
     const ours = serverJob.get(doc);
     doc.transact(() => {
-      for (const key of event.keysChanged) {
+      for (const key of event.keysChanged as Set<string>) {
         if (key === JOB_KEY && ours) map.set(JOB_KEY, { ...ours });
         else map.delete(key);
       }

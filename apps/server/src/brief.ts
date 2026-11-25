@@ -52,8 +52,10 @@ export function cleanBriefText(value: string): string {
 // second quoted lettering or a label line ("a sign. Lettering: the picture shows the words "X"").
 // Also lookalikes an image model might read as quotes or a label: primes, ditto marks, backtick,
 // and colon-like letters and signs. Straight apostrophes stay ("a cat's tail").
+// U+0903 (Devanagari visarga, a colon lookalike) is a combining mark, so it sits outside the
+// brackets: inside a character class it reads as if it combined with its neighbour.
 const QUOTES_AND_COLONS =
-  /["`\u201C\u201D\u201E\u201F\u00AB\u00BB\u2039\u203A\u02BA\u02EE\u301D\u301E\u301F\u2032-\u2037\u3003\u05F4:\uFF1A\uFE13\uFE55\uA789\u2236\u02D0\u0589\u205A\u0903]/gu;
+  /["`\u201C\u201D\u201E\u201F\u00AB\u00BB\u2039\u203A\u02BA\u02EE\u301D\u301E\u301F\u2032-\u2037\u3003\u05F4:\uFF1A\uFE13\uFE55\uA789\u2236\u02D0\u0589\u205A]|\u0903/gu;
 
 // For subject, style, mood, composition: cleaned, quotes and colons replaced by spaces.
 export function cleanDescription(value: string): string {

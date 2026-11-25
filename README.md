@@ -70,13 +70,16 @@ Generated pictures are stored in `apps/server/data/images` (gitignored).
 ## Checks
 
 ```bash
+pnpm lint
 pnpm typecheck
 pnpm test
 pnpm build
 ```
 
-CI runs install, typecheck, test and build on every PR and push to main. New logic gets tests next
-to its source (`foo.ts` → `foo.test.ts`, Vitest).
+`pnpm lint` is type-aware ESLint (typescript-eslint, React hooks). It also enforces the money and key
+rules: only the AI wrappers may import an AI SDK, and the web app may not read a key-like `VITE_`
+variable. CI runs all four on every PR and push to main, then checks the built web bundle for keys.
+New logic gets tests next to its source (`foo.ts` → `foo.test.ts`, Vitest).
 
 ## Working with Claude Code
 
@@ -96,7 +99,7 @@ In Claude Code, for example:
 
 > Use the reviewer agent on my latest changes.
 
-A hook (`.claude/hooks/check-before-commit.sh`) runs typecheck and tests before Claude Code
+A hook (`.claude/hooks/check-before-commit.sh`) runs lint, typecheck and tests before Claude Code
 commits.
 
 ## Next (planned)

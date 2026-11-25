@@ -6,6 +6,7 @@ import { RoomControls } from './components/RoomControls';
 import { Toolbar } from './components/Toolbar';
 import { useIdentity } from './hooks/useIdentity';
 import { useJob } from './hooks/useJob';
+import { useNote } from './hooks/useNote';
 import { useRoomName } from './hooks/useRoomName';
 import { exportSketch } from './lib/exportSketch';
 import { requestGenerate } from './lib/generateClient';
@@ -13,7 +14,7 @@ import { readStrokes } from './lib/strokes';
 import { COLORS, ERASER_SCALE, type Size } from './lib/tools';
 import { joinRoom, type Room } from './sync/room';
 import type { Tool } from './types';
-import { isActive, jobText, rememberJob } from './lib/jobs';
+import { isActive, jobText } from './lib/jobs';
 
 export function App() {
   const roomName = useRoomName();
@@ -23,7 +24,6 @@ export function App() {
   const [tool, setTool] = useState<Tool>('pen');
   const [color, setColor] = useState(COLORS[0]!);
   const [size, setSize] = useState<Size>(4);
-  const [status, setStatus] = useState('');
   const [identity, rename] = useIdentity();
   const width = tool === 'eraser' ? size * ERASER_SCALE : size;
 
@@ -31,6 +31,8 @@ export function App() {
   // (disconnects and removes us from its awareness), then the new one is joined.
   useEffect(() => {
     const r = joinRoom(roomName);
+    // The room is a connection this effect opens and closes; the state only hands it to render.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- an external resource made here
     setJoined(r);
     return () => r.destroy();
   }, [roomName]);
@@ -56,53 +58,35 @@ export function App() {
 
   // The room's generation, shared by everyone in the room: while it runs, Generate is off for all
   // of them (the server's room lock is the real gate; this just says so before anyone clicks).
-  const job = useJob(room?.job);
+  // `seen`: jobs this tab saw running (capped at SEEN_JOBS_MAX).
+  const jobView = useJob(room?.job);
+  const { job, seen } = jobView;
   const generating = isActive(job);
-  // Jobs this tab saw running (capped), and the one it started itself (kept apart, so a peer
-  // flashing fake job ids can't push it out), per room.
-  const seenJobs = useRef(new Set<string>());
-  const myJob = useRef<string | null>(null);
-  useEffect(() => {
-    seenJobs.current = new Set();
-    myJob.current = null;
-  }, [roomName]);
-  const seenOrMine = { has: (id: string) => id === myJob.current || seenJobs.current.has(id) };
-  useEffect(() => {
-    if (job && isActive(job)) rememberJob(seenJobs.current, job.id);
-  }, [job]);
-  // A new job, or the current one changing, replaces this tab's own message (e.g. "already being
-  // generated"), so the shared status shows.
-  useEffect(() => {
-    setStatus('');
-  }, [job?.id, job?.status]);
+  // The job this tab started itself, kept apart from `seen` so a peer flashing fake job ids can't
+  // push it out. Tied to this join of the room (the room object), like `seen`.
+  const [mine, setMine] = useState<{ room: Room; id: string } | null>(null);
+  const seenOrMine = { has: (id: string) => (mine?.room === room && mine.id === id) || seen.has(id) };
 
-  // The room on screen right now. A result that arrives after a room switch belongs to the old room
-  // and must not show up in the new one.
-  const roomNameRef = useRef(roomName);
-  useEffect(() => {
-    roomNameRef.current = roomName;
-    setStatus('');
-  }, [roomName]);
+  // This tab's own message; it steps aside once the room or the job changes (hooks/useNote.ts).
+  const { note: status, writeNote } = useNote(room, jobView);
 
   // Export the room's sketch and send it to the server. A canvas with no ink (empty, or only eraser
   // strokes on blank paper) is not sent: once the pipeline is built, every request costs money.
   const generate = async () => {
     if (!room || sendingRef.current || generating) return;
+    const forRoom = room;
+    const show = (text: string) => writeNote(forRoom, text);
     const strokes = readStrokes(room.strokes);
     if (!strokes.some((s) => s.tool !== 'eraser')) {
-      setStatus('Draw something first.');
+      show('Draw something first.');
       return;
     }
-    const forRoom = room.name;
-    const show = (text: string) => {
-      if (roomNameRef.current === forRoom) setStatus(text);
-    };
     sendingRef.current = true;
     setSending(true);
-    setStatus('Sending the sketch...');
+    show('Sending the sketch...');
     try {
-      const result = await requestGenerate(forRoom, await exportSketch(strokes));
-      if (result.ok && roomNameRef.current === forRoom) myJob.current = result.jobId;
+      const result = await requestGenerate(forRoom.name, await exportSketch(strokes));
+      if (result.ok) setMine({ room: forRoom, id: result.jobId });
       // Once the job has started, the shared job status takes over the status bar.
       show(result.ok ? '' : result.error);
     } catch (err) {
@@ -134,7 +118,7 @@ export function App() {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12, alignItems: 'center' }}>
         <Toolbar tool={tool} color={color} size={size} onTool={setTool} onColor={setColor} onSize={setSize} />
         <button onClick={clearCanvas}>Clear</button>
-        <button onClick={generate} disabled={sending || generating}>
+        <button onClick={() => void generate()} disabled={sending || generating}>
           Generate
         </button>
         <span>{status || jobText(job, seenOrMine)}</span>
