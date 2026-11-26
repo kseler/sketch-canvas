@@ -95,20 +95,13 @@ describe('jobText', () => {
     expect(jobText({ id: 'job-1', status: 'failed', error: 'Busy.' }, seen)).toBe('Busy.');
   });
 
-  it('shows "Picture ready." and the brief for a done job with a picture', () => {
-    expect(jobText(done(true), seen)).toBe('Picture ready. Brief: a cat · flat · calm');
+  it('shows nothing for a finished picture: the picture says it', () => {
+    expect(jobText(done(true), seen)).toBe('');
+    expect(jobText(done(true, null), seen)).toBe('');
   });
 
-  it('shows only the brief when the server stopped after it', () => {
-    expect(jobText(done(false), seen)).toBe('Brief: a cat · flat · calm');
-  });
-
-  it('names the lettering when there is some', () => {
-    expect(jobText(done(true, { ...brief, lettering: 'HI' }), seen)).toBe('Picture ready. Brief: a cat · flat · calm · with the words "HI"');
-  });
-
-  it('shows "Picture ready." alone when the brief was unreadable', () => {
-    expect(jobText(done(true, null), seen)).toBe('Picture ready.');
+  it('says so when the server stopped after the brief (no image key)', () => {
+    expect(jobText(done(false), seen)).toBe('This server makes no pictures yet (no image key).');
   });
 
   it('shows nothing for how an older job ended, to a tab that did not see it run', () => {

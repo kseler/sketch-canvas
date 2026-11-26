@@ -54,19 +54,15 @@ export function rememberJob(seen: Set<string>, id: string): void {
   }
 }
 
-// One line for the status bar. React shows it as text, never as HTML.
-export function briefSummary(brief: Brief): string {
-  const words = brief.lettering ? ` · with the words "${brief.lettering}"` : '';
-  return `Brief: ${brief.subject} · ${brief.style} · ${brief.mood}${words}`;
-}
-
-// What the room's job says in the status bar. How a job ended is shown only to tabs that saw it
-// run (`seen`), so someone joining later isn't greeted by an old error.
+// What the room's job says above the picture. A finished picture needs no words; how a job ended is
+// shown only to tabs that saw it run (`seen`), so someone joining later isn't greeted by an old error.
+// React shows it as text, never as HTML.
 export function jobText(job: Job | null, seen: Pick<ReadonlySet<string>, 'has'>): string {
   if (!job) return '';
   if (isActive(job)) return 'Generating...';
   if (!seen.has(job.id)) return '';
   if (job.status === 'failed') return job.error;
   if (job.status !== 'done') return '';
-  return [job.picture ? 'Picture ready.' : '', job.brief ? briefSummary(job.brief) : ''].filter(Boolean).join(' ');
+  // No picture means the server has no image key and stopped after the brief.
+  return job.picture ? '' : 'This server makes no pictures yet (no image key).';
 }

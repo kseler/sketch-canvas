@@ -1,0 +1,20 @@
+/* Fills the space it's given; the paper sits in the middle. Its size is what the canvas scales to
+   (useElementSize), so moving it (a transform) never rescales the drawing; resizing it does. */
+.area {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The white paper: 1px border (BORDER in Canvas.tsx), soft corners and shadow. */
+.paper {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: #fff;
+  box-shadow: var(--shadow-md);
+  line-height: 0; /* no gap under the canvas element */
+}

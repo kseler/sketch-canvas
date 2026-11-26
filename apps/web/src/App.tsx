@@ -1,20 +1,23 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import styles from './App.module.css';
 import { Canvas } from './components/Canvas';
-import { PicturePanel } from './components/PicturePanel';
-import { Presence } from './components/Presence';
-import { RoomControls } from './components/RoomControls';
+import { ResultPanel } from './components/ResultPanel';
 import { Toolbar } from './components/Toolbar';
+import { TopBar } from './components/TopBar';
+import { useHasPicture } from './hooks/useHasPicture';
 import { useIdentity } from './hooks/useIdentity';
 import { useJob } from './hooks/useJob';
 import { useNote } from './hooks/useNote';
+import { usePeople } from './hooks/usePeople';
 import { useRoomName } from './hooks/useRoomName';
 import { exportSketch } from './lib/exportSketch';
 import { requestGenerate } from './lib/generateClient';
+import { isActive, jobText } from './lib/jobs';
+import { resultButton, viewedAfterLooking } from './lib/resultButton';
 import { readStrokes } from './lib/strokes';
 import { COLORS, ERASER_SCALE, type Size } from './lib/tools';
 import { joinRoom, type Room } from './sync/room';
 import type { Tool } from './types';
-import { isActive, jobText } from './lib/jobs';
 
 export function App() {
   const roomName = useRoomName();
@@ -25,6 +28,7 @@ export function App() {
   const [color, setColor] = useState(COLORS[0]!);
   const [size, setSize] = useState<Size>(4);
   const [identity, rename] = useIdentity();
+  const people = usePeople(room?.awareness ?? null);
   const width = tool === 'eraser' ? size * ERASER_SCALE : size;
 
   // Join the room in the URL. When it changes, the cleanup leaves the old room first
@@ -68,7 +72,32 @@ export function App() {
   const seenOrMine = { has: (id: string) => (mine?.room === room && mine.id === id) || seen.has(id) };
 
   // This tab's own message; it steps aside once the room or the job changes (hooks/useNote.ts).
-  const { note: status, writeNote } = useNote(room, jobView);
+  const { note, writeNote } = useNote(room, jobView);
+
+  // The result panel. Open for one room at a time (switching rooms closes it), and the last ended
+  // job seen in it, for the Result button's dot.
+  const [panelFor, setPanelFor] = useState<Room | null>(null);
+  const [viewed, setViewed] = useState<{ room: Room; job: string | null } | null>(null);
+  const panelOpen = room !== null && panelFor === room;
+  const hasPicture = useHasPicture(room?.images);
+  const viewedJob = viewed?.room === room ? viewed.job : null;
+  const result = resultButton({
+    job,
+    seen: seenOrMine,
+    hasPicture,
+    panelOpen,
+    viewedJob,
+  });
+  const lookedAt = viewedAfterLooking(job, viewedJob);
+  const openPanel = () => {
+    if (!room) return;
+    setPanelFor(room);
+    setViewed({ room, job: lookedAt });
+  };
+  const closePanel = useCallback(() => {
+    setPanelFor(null);
+    if (room) setViewed({ room, job: lookedAt });
+  }, [room, lookedAt]);
 
   // Export the room's sketch and send it to the server. A canvas with no ink (empty, or only eraser
   // strokes on blank paper) is not sent: once the pipeline is built, every request costs money.
@@ -85,10 +114,14 @@ export function App() {
     setSending(true);
     show('Sending the sketch...');
     try {
-      const result = await requestGenerate(forRoom.name, await exportSketch(strokes));
-      if (result.ok) setMine({ room: forRoom, id: result.jobId });
-      // Once the job has started, the shared job status takes over the status bar.
-      show(result.ok ? '' : result.error);
+      const reply = await requestGenerate(forRoom.name, await exportSketch(strokes));
+      if (reply.ok) {
+        setMine({ room: forRoom, id: reply.jobId });
+        // Whoever clicked Generate watches it happen; everyone else gets the Result button's dot.
+        setPanelFor(forRoom);
+      }
+      // Once the job has started, the shared job status takes over.
+      show(reply.ok ? '' : reply.error);
     } catch (err) {
       console.error('Exporting the sketch failed:', err);
       show('Could not export the sketch.');
@@ -98,41 +131,60 @@ export function App() {
     }
   };
 
+  const canGenerate = room !== null && !sending && !generating;
+  const shownJob = job && seenOrMine.has(job.id) ? job : null;
+
   return (
-    // Full-height column: header and toolbar take what they need, the canvas gets the rest.
-    <main
-      style={{
-        fontFamily: 'system-ui, sans-serif',
-        padding: 24,
-        height: '100dvh',
-        boxSizing: 'border-box',
-        display: 'flex',
-        flexDirection: 'column',
-      }}
-    >
-      <header style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', justifyContent: 'space-between' }}>
-        <h1 style={{ margin: 0 }}>Sketch Canvas</h1>
-        {room && <Presence key={room.name} awareness={room.awareness} onRename={rename} />}
-      </header>
-      <RoomControls roomName={roomName} />
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12, alignItems: 'center' }}>
-        <Toolbar tool={tool} color={color} size={size} onTool={setTool} onColor={setColor} onSize={setSize} />
-        <button onClick={clearCanvas}>Clear</button>
-        <button onClick={() => void generate()} disabled={sending || generating}>
-          Generate
-        </button>
-        <span>{status || jobText(job, seenOrMine)}</span>
-      </div>
-      {room ? (
-        // The canvas takes the remaining space; the picture panel sits beside it (sketch stays visible).
-        <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 16 }}>
-          {/* key: a fresh canvas per room, so nothing half-drawn carries over. */}
-          <Canvas key={room.name} strokes={room.strokes} awareness={room.awareness} tool={tool} color={color} width={width} />
-          <PicturePanel key={`${room.name}-picture`} images={room.images} busy={generating} />
-        </div>
-      ) : (
-        <p>Connecting...</p>
-      )}
-    </main>
+    <div className={styles.app}>
+      <TopBar
+        roomName={roomName}
+        people={people}
+        onRename={rename}
+        onGenerate={() => void generate()}
+        canGenerate={canGenerate}
+        result={{ ...result, onOpen: openPanel }}
+      />
+      <main className={styles.stage}>
+        {room ? (
+          <>
+            {/* Slides aside when the result panel opens (moved, not resized, so the drawing keeps
+                its scale) and sits under an overlay that blocks drawing until the panel closes. */}
+            <div className={styles.workspace} data-shifted={panelOpen} inert={panelOpen}>
+              {/* key: a fresh canvas per room, so nothing half-drawn carries over. */}
+              <Canvas key={room.name} strokes={room.strokes} awareness={room.awareness} tool={tool} color={color} width={width} />
+              <div className={styles.dock}>
+                {/* Always there, so screen readers announce the text when it appears; hidden when empty. */}
+                <p className={styles.toast} role="status">
+                  {panelOpen ? '' : note}
+                </p>
+                <Toolbar
+                  tool={tool}
+                  color={color}
+                  size={size}
+                  onTool={setTool}
+                  onColor={setColor}
+                  onSize={setSize}
+                  onClear={clearCanvas}
+                />
+              </div>
+            </div>
+            {panelOpen && <div className={styles.overlay} onClick={closePanel} aria-hidden="true" />}
+            <ResultPanel
+              key={`${room.name}-result`}
+              open={panelOpen}
+              images={room.images}
+              busy={generating}
+              status={note || jobText(job, seenOrMine)}
+              failed={!note && shownJob?.status === 'failed'}
+              canRegenerate={canGenerate}
+              onRegenerate={() => void generate()}
+              onClose={closePanel}
+            />
+          </>
+        ) : (
+          <p className={styles.connecting}>Connecting...</p>
+        )}
+      </main>
+    </div>
   );
 }
