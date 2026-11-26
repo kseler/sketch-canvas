@@ -9,6 +9,7 @@ import { appendIfFar, minDistanceFor, withFinalPoint, type Point } from '../lib/
 import { liveTail, readStrokes } from '../lib/strokes';
 import type { Awareness } from '../sync/room';
 import type { Stroke, Tool } from '../types';
+import styles from './Canvas.module.css';
 import { CursorsLayer } from './CursorsLayer';
 import { LiveStrokes } from './LiveStrokes';
 import { StrokeLine } from './StrokeLine';
@@ -96,10 +97,10 @@ export function Canvas({ strokes, awareness, tool, color, width }: Props) {
   };
 
   return (
-    // The outer area takes all remaining space; the bordered box inside hugs the scaled canvas.
-    <div ref={areaRef} style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'flex-start' }}>
+    // The outer area takes all remaining space; the paper inside hugs the scaled canvas.
+    <div ref={areaRef} className={styles.area}>
       {scale > 0 && (
-        <div style={{ border: `${BORDER}px solid #ccc` }}>
+        <div className={styles.paper}>
           <Stage
             width={Math.floor(CANVAS_WIDTH * scale)}
             height={Math.floor(CANVAS_HEIGHT * scale)}

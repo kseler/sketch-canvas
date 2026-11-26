@@ -1,0 +1,92 @@
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+
+/* Everything under the top bar. The workspace, the overlay and the result panel stack in here. */
+.stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  /* clip, not hidden: a hidden box can still be scrolled by the browser (focusing something off to
+     the side), which made the canvas jump; a clipped one can't. */
+  overflow: clip;
+  /* The workspace's shift is measured against this box (cqw, cqh). */
+  container-type: size;
+}
+
+/* The canvas and its toolbar. Moving it aside uses a transform: its size stays the same, so the
+   canvas (which scales to its own size) keeps its scale.
+   How far it moves: ideally half the panel's width, so the paper sits in the middle of the space
+   the panel leaves; but never so far that the paper's left edge goes off screen. Where there isn't
+   room for both (tablets, most laptops), the panel covers part of the paper instead. The paper's
+   size is worked out the same way Canvas.tsx does it: 4:3, as large as fits in the padded box. */
+.workspace {
+  --pad-x: var(--space-5);
+  --pad-top: var(--space-5);
+  --pad-bottom: 104px; /* room for the toolbar */
+  --paper-width: min(100cqw - 2 * var(--pad-x), (100cqh - var(--pad-top) - var(--pad-bottom)) * 4 / 3);
+  --paper-left: calc(var(--pad-x) + (100cqw - 2 * var(--pad-x) - var(--paper-width)) / 2);
+  --shift: min(var(--result-panel-width) / 2 + var(--space-3), var(--paper-left) - var(--space-4));
+
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--pad-top) var(--pad-x) var(--pad-bottom);
+  transition: transform var(--motion);
+
+  &[data-shifted='true'] {
+    transform: translateX(calc(-1 * max(0px, var(--shift))));
+  }
+}
+
+/* The toolbar floats at the bottom; this tab's own messages appear just above it. */
+.dock {
+  position: absolute;
+  left: 50%;
+  bottom: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  width: max-content;
+  max-width: calc(100% - var(--space-5) * 2);
+  transform: translateX(-50%);
+}
+
+.toast {
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-pill);
+  background: var(--text);
+  color: #fff;
+  font-size: var(--text-sm);
+  box-shadow: var(--shadow-md);
+
+  &:empty {
+    display: none;
+  }
+}
+
+/* Over the pushed-aside canvas while the panel is open: a click closes the panel. */
+.overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  background: rgb(244 244 247 / 55%);
+  backdrop-filter: blur(1px);
+}
+
+.connecting {
+  margin: var(--space-6);
+  color: var(--text-muted);
+}
+
+/* On a narrow screen the panel covers the whole width, so nothing needs to move. */
+@media (max-width: 720px) {
+  .workspace[data-shifted='true'] {
+    transform: none;
+  }
+}

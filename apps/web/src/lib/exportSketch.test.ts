@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from './canvasSize';
-import { exportArea } from './exportSketch';
+import { exportArea, hasInk } from './exportSketch';
 
 // exportSketch itself needs a real <canvas> (Konva), which jsdom does not have; not tested here.
 
@@ -52,5 +52,27 @@ describe('exportArea', () => {
     ['NaN height', { x: 0, y: 0, width: 10, height: NaN }],
   ])('is null for a region %s', (_label, region) => {
     expect(exportArea(region)).toBeNull();
+  });
+});
+
+describe('hasInk', () => {
+  const pixels = (alphas: number[]) => alphas.flatMap((a) => [0, 0, 0, a]);
+
+  it('is false for an empty or fully erased layer', () => {
+    expect(hasInk([])).toBe(false);
+    expect(hasInk(pixels(Array(1000).fill(0)))).toBe(false);
+  });
+
+  it('ignores the faint fringe an eraser can leave along an edge', () => {
+    expect(hasInk(pixels(Array(1000).fill(40)))).toBe(false);
+  });
+
+  it('is true once a few pixels hold real ink, like the smallest dot', () => {
+    expect(hasInk(pixels([255, 255, 255, 255]))).toBe(true);
+    expect(hasInk(pixels([128, 200, 255, 130, ...Array(100).fill(0)]))).toBe(true);
+  });
+
+  it('needs more than a stray pixel or two', () => {
+    expect(hasInk(pixels([255, 255, 255, ...Array(100).fill(0)]))).toBe(false);
   });
 });

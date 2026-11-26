@@ -7,6 +7,14 @@ becomes the prompt for an image model. Everyone in the room sees the picture.
 Built as an AI engineering project: structured outputs, context engineering, cost control, evals
 and guardrails.
 
+<!-- Screenshot 1: the app with a blank canvas (top bar, toolbar, empty paper). Save as
+     docs/screenshots/canvas.png. -->
+![Sketch Canvas with a blank canvas](docs/screenshots/canvas.png)
+
+<!-- Screenshot 2: something drawn, with the result panel open next to it. Save as
+     docs/screenshots/result.png. -->
+![A sketch with the generated picture in the result panel](docs/screenshots/result.png)
+
 Plan (Nov 20-30): https://claude.ai/artifact/KESXp5mW6EfHtRKp4BaW1N
 
 ## Run it
@@ -37,20 +45,27 @@ real money (about $0.018 per picture at the dev tier).
 
 ## What works now
 
-- **Drawing:** pen and eraser, six colors, three sizes, clear.
+- **Drawing:** pen and eraser, seven colors, three line sizes, clear, fullscreen. Select, text,
+  shapes, more colors, undo and redo are in the toolbar but not built yet (shown disabled).
 - **Multiplayer:** shared rooms by link, live strokes while they are drawn, cursors and names,
   people counted once even with several tabs open.
-- **Generate:** exports the sketch as PNG and sends it to the server, which:
-  1. checks the PNG and the request (size, origin, one generation per room at a time);
+- **Generate:** exports the sketch as PNG (a blank or fully erased sketch is never sent) and sends
+  it to the server, which answers at once and runs the rest as a job everyone in the room sees:
+  1. checks the PNG and the request (size, origin, one generation per room at a time, at most 8
+     on the server);
   2. asks Claude Haiku for a brief (subject, style, mood, palette, composition, lettering),
      validated with a JSON schema and zod, with any words from the sketch filtered;
   3. builds the image prompt from the brief and runs it through OpenAI's free moderation check,
      which fails closed;
   4. generates the picture with OpenAI's image model at the cheapest tier;
   5. stores the PNG on the server and adds a small record to the room's shared Yjs document, so
-     every tab shows it in the panel beside the canvas.
+     every tab gets it.
 
-  If any step fails, nothing after it runs and no picture is shared.
+  If any step fails, nothing after it runs and no picture is shared. Pictures stay with their room
+  across server restarts.
+- **Result panel:** the person who clicked Generate sees it open next to the canvas with a loading
+  animation, then the picture (Regenerate, Download). Everyone else gets a dot on the top bar's
+  Result button. While the panel is open, the canvas slides aside and can't be drawn on.
 - **Cost control:** every paid call goes through one wrapper (`paidCall` in
   `apps/server/src/cost.ts`) that reserves the estimated cost against the daily caps before the
   call and logs the real cost to `apps/server/cost-log.jsonl` after it. Today's total is rebuilt
@@ -59,7 +74,7 @@ real money (about $0.018 per picture at the dev tier).
 ## Layout
 
 ```
-apps/web      React + Konva canvas, Yjs client, picture panel
+apps/web      React + Konva canvas, Yjs client, result panel; CSS Modules + src/styles/tokens.css
 apps/server   Hono HTTP, Yjs WebSocket sync, generate pipeline, cost wrapper and log
 .claude/      Claude Code agents and the pre-commit hook
 CLAUDE.md     project rules that Claude Code follows
@@ -104,6 +119,7 @@ commits.
 
 ## Next (planned)
 
-- Generation as a job with a status, so everyone in the room sees "generating" while it runs.
+- Stop a running generation (for the person who started it).
 - A cache, draft-then-final generation and a cost meter.
 - Evals for the brief and the picture.
+- Later: undo and redo, text, shapes and a select tool.

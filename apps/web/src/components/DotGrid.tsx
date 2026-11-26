@@ -1,6 +1,9 @@
-// The "generating" picture everyone in the room sees while a job runs: a dark 4:3 square with a
-// grid of blue dots that swell and fade in soft, drifting waves. No steps and no percentage: the
-// server can't know how far the image model is. Pure CSS; with reduced motion the dots stay still.
+import styles from './DotGrid.module.css';
+
+// The "generating" picture everyone in the room sees while a job runs: a soft 4:3 card with a
+// grid of accent-purple dots that swell and fade in soft, drifting waves. No steps and no percentage: the
+// server can't know how far the image model is. The animation is in DotGrid.module.css; with
+// reduced motion the dots stay still.
 
 const COLUMNS = 16;
 const ROWS = 12;
@@ -15,47 +18,17 @@ function delayFor(x: number, y: number): number {
 
 const DOTS = Array.from({ length: COLUMNS * ROWS }, (_, i) => delayFor(i % COLUMNS, Math.floor(i / COLUMNS)));
 
-const STYLE = `
-@keyframes dotgrid-swell {
-  0%, 100% { transform: scale(0.25); opacity: 0.25; }
-  50% { transform: scale(1); opacity: 1; }
-}
-.dotgrid-dot { animation: dotgrid-swell ${PERIOD_S}s ease-in-out infinite; }
-@media (prefers-reduced-motion: reduce) {
-  .dotgrid-dot { animation: none; transform: scale(0.5); opacity: 0.6; }
-}
-`;
-
 export function DotGrid() {
   return (
     <div
       role="status"
       aria-label="Generating the picture"
-      style={{
-        aspectRatio: '4 / 3',
-        width: '100%',
-        boxSizing: 'border-box',
-        background: '#0b1020',
-        padding: '6%',
-        display: 'grid',
-        gridTemplateColumns: `repeat(${COLUMNS}, 1fr)`,
-        gridTemplateRows: `repeat(${ROWS}, 1fr)`,
-        placeItems: 'center',
-      }}
+      className={styles.grid}
+      style={{ gridTemplateColumns: `repeat(${COLUMNS}, 1fr)`, gridTemplateRows: `repeat(${ROWS}, 1fr)` }}
     >
-      <style>{STYLE}</style>
       {DOTS.map((delay, i) => (
-        <span
-          key={i}
-          className="dotgrid-dot"
-          style={{
-            width: '70%',
-            aspectRatio: '1',
-            borderRadius: '50%',
-            background: '#3b82f6',
-            animationDelay: `${delay.toFixed(2)}s`,
-          }}
-        />
+        // Only the delay differs per dot; it shifts each dot's place in the shared swell.
+        <span key={i} data-dot="" className={styles.dot} style={{ animationDelay: `${delay.toFixed(2)}s`, animationDuration: `${PERIOD_S}s` }} />
       ))}
     </div>
   );

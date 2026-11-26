@@ -11,18 +11,22 @@ export type { Peer };
 //
 // `view` must be a stable function (defined outside the component), and should return flat objects:
 // items are compared field by field with Object.is.
-export function usePeers<T extends object>(awareness: Awareness, view: (peer: Peer) => T | null): T[] {
-  const [items, setItems] = useState<T[]>(() => viewPeers(awareness, view));
+// `awareness` is null while the room is still connecting: nobody is there yet.
+export function usePeers<T extends object>(awareness: Awareness | null, view: (peer: Peer) => T | null): T[] {
+  const [items, setItems] = useState<T[]>(() => (awareness ? viewPeers(awareness, view) : []));
 
   useEffect(() => {
+    if (!awareness) return;
     const update = () => setItems((prev) => keepIfSame(prev, viewPeers(awareness, view)));
     awareness.on('change', update);
     update();
     return () => awareness.off('change', update);
   }, [awareness, view]);
 
-  return items;
+  return awareness ? items : NOBODY;
 }
+
+const NOBODY: never[] = [];
 
 function viewPeers<T>(awareness: Awareness, view: (peer: Peer) => T | null): T[] {
   return peersFromStates(awareness.getStates(), awareness.clientID)

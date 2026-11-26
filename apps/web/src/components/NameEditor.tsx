@@ -1,5 +1,7 @@
+import { Pencil } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { cleanName, hasVisibleText, MAX_NAME_LENGTH } from '../lib/identity';
+import styles from './NameEditor.module.css';
 
 type Props = { name: string; onRename: (name: string) => void };
 
@@ -16,8 +18,9 @@ export function NameEditor({ name, onRename }: Props) {
       setDraft(name);
     };
     return (
-      <button onClick={edit} title="Click to rename">
-        You: {name} ✎
+      <button type="button" onClick={edit} title="Click to rename" className={styles.name}>
+        <span className={styles.text}>{name}</span>
+        <Pencil size={14} aria-hidden="true" />
       </button>
     );
   }
@@ -31,6 +34,7 @@ export function NameEditor({ name, onRename }: Props) {
 
   return (
     <input
+      className={styles.input}
       autoFocus
       onFocus={(e) => e.target.select()} // typing replaces the old name
       value={draft}
