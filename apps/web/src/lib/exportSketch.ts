@@ -18,12 +18,29 @@ export function exportArea(region?: Region): Region | null {
   return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
 }
 
+// Pixels that count as ink: alpha at least half. The eraser cuts ink away (alpha 0); the faint
+// anti-aliased fringe it can leave along an erased edge doesn't count.
+const INK_ALPHA = 128;
+// A visible mark is more than a few such pixels; a single dot with the smallest pen is about 4.
+const MIN_INK_PIXELS = 4;
+
+// Whether RGBA pixel data (4 bytes per pixel) holds any visible ink: enough pixels with real alpha.
+export function hasInk(rgba: ArrayLike<number>): boolean {
+  let found = 0;
+  for (let i = 3; i < rgba.length; i += 4) {
+    if (rgba[i]! >= INK_ALPHA && ++found >= MIN_INK_PIXELS) return true;
+  }
+  return false;
+}
+
 // The sketch as a PNG for the vision model: the document's strokes on white paper, at canvas
 // resolution (1 canvas unit = 1 pixel), whatever the size of the screen.
 // It draws the strokes again on a hidden stage instead of copying the visible canvas, so cursors,
 // other players' half-finished strokes and the screen's zoom never end up in the image.
 // PNG, not JPEG: tokens depend on pixels, not bytes, and JPEG would blur the thin lines.
-export async function exportSketch(strokes: readonly Stroke[], { region }: { region?: Region } = {}): Promise<Blob> {
+// Null when nothing is left to see: every pen stroke erased (the eraser is a stroke too, so the
+// strokes alone can't tell), or no strokes in the area. Such a sketch is never sent (it costs money).
+export async function exportSketch(strokes: readonly Stroke[], { region }: { region?: Region } = {}): Promise<Blob | null> {
   const area = exportArea(region);
   if (!area) throw new Error('The export region is outside the canvas.');
 
@@ -36,6 +53,7 @@ export async function exportSketch(strokes: readonly Stroke[], { region }: { reg
     const ink = new Konva.Layer();
     for (const stroke of strokes) ink.add(new Konva.Line(strokeLineConfig(stroke)));
     stage.add(paper, ink);
+    if (!inkIn(ink, area)) return null;
     const blob: Blob | null = await stage.toBlob({ ...area, pixelRatio: 1, mimeType: 'image/png' });
     // Typed as Blob, but a browser that fails to encode the canvas hands back null.
     if (!blob) throw new Error('The browser could not encode the sketch as PNG.');
@@ -43,4 +61,21 @@ export async function exportSketch(strokes: readonly Stroke[], { region }: { reg
   } finally {
     stage.destroy();
   }
+}
+
+// Reads the ink layer's pixels (strokes with the eraser's cuts applied, before the white paper) in
+// the export area. The layer's canvas may be denser than canvas units (the screen's pixel ratio).
+function inkIn(ink: Konva.Layer, area: Region): boolean {
+  ink.draw();
+  const canvas = ink.getNativeCanvasElement();
+  const ratio = canvas.width / CANVAS_WIDTH;
+  const context = canvas.getContext('2d');
+  if (!context) return true; // can't look: send it rather than block Generate
+  const { data } = context.getImageData(
+    Math.floor(area.x * ratio),
+    Math.floor(area.y * ratio),
+    Math.max(1, Math.floor(area.width * ratio)),
+    Math.max(1, Math.floor(area.height * ratio)),
+  );
+  return hasInk(data);
 }

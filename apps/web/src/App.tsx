@@ -114,7 +114,13 @@ export function App() {
     setSending(true);
     show('Sending the sketch...');
     try {
-      const reply = await requestGenerate(forRoom.name, await exportSketch(strokes));
+      // Null when everything drawn was erased again: nothing to send, and nothing to pay for.
+      const sketch = await exportSketch(strokes);
+      if (!sketch) {
+        show('Draw something first.');
+        return;
+      }
+      const reply = await requestGenerate(forRoom.name, sketch);
       if (reply.ok) {
         setMine({ room: forRoom, id: reply.jobId });
         // Whoever clicked Generate watches it happen; everyone else gets the Result button's dot.
