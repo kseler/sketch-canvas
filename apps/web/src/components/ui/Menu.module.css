@@ -1,0 +1,14 @@
+/* Placed by Menu.tsx (placeMenu) in window coordinates, so it can never open off screen. */
+.panel {
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--text-sm);
+}
